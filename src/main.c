@@ -6,7 +6,6 @@
 
 #define APP_FEATURE 0
 #define PAGE_SIZE 5
-#define SMALL_ROWS 26
 #define SLEEP_EVENT (firstUserEvent + 1)
 #define CONNECT_TIMEOUT 45UL
 
@@ -19,24 +18,22 @@ typedef struct {
     DmOpenRef db;
     PtProfile profile;
     PtLogin login;
+    PtAppearance appearance, draft;
     PtKeyIO key_io;
     Char value[PT_PATH_MAX], secret[PT_PASSWORD_MAX], protection[PT_PASSWORD_MAX];
-    Char name[PT_LABEL_MAX];
+    Char name[PT_LABEL_MAX], line_draft[256];
     uint8_t detail[36];
     UInt32 rows_id[PAGE_SIZE];
     Char rows_text[PAGE_SIZE][42];
     Char *choices[PAGE_SIZE];
-    UInt32 target_key, timestamp;
-    UInt16 page, row_count, file_size, text_action, secret_action, rows, key_job;
+    UInt32 target_key, timestamp, cursor_deadline;
+    UInt16 page, row_count, file_size, text_action, secret_action, rows, key_job, cursor_interval;
     Boolean listing_keys, more, generating, pumping, ssh_started, shell, ctrl, typing, stopped;
-    Boolean sleep_pending, deferred_sleep;
+    Boolean sleep_pending, deferred_sleep, cursor_on;
 #ifdef PT_PROFILE
     UInt32 heap_at_launch, handshake_ticks, key_ticks;
 #endif
-    BitmapType *row_bitmap;
-    BitmapTypeV3 *row_display;
-    void *row_bits;
-    UInt16 row_stride;
+    PtBitmap terminal, preview;
 } App;
 
 static App *current(void)
@@ -213,7 +210,9 @@ static void stop(App *a)
     a->shell = false;
     a->typing = false;
     a->ctrl = false;
-    a->rows = PT_GRID_ROWS;
+    pt_wipe(a->line_draft, sizeof(a->line_draft));
+    pt_bitmap_close(&a->preview);
+    a->rows = pt_rows(&a->appearance, 0);
     pt_net_close(&a->net);
     pt_call(&a->arm, PT_STOP, NULL, 0, 0);
     clear_credentials(a);
@@ -282,8 +281,7 @@ static void connect(App *a)
     }
     MemSet(&a->login, sizeof(a->login), 0);
     StrCopy(a->login.user, a->profile.user);
-    a->login.cols = PT_GRID_COLS;
-    a->login.rows = PT_GRID_ROWS;
+    a->login.appearance = a->appearance;
     a->login.key_auth = a->profile.key != 0;
     a->login.pinned = pt_pin_find(a->db, &a->profile, a->login.fingerprint) != 0;
     if (a->login.pinned) authentication(a);
@@ -595,24 +593,102 @@ static Boolean secret_key(App *a, const EventType *event)
     return true;
 }
 
+static void open_settings(App *a)
+{
+    a->draft = a->appearance;
+    if (a->shell && a->typing) get_field(ShellText, a->line_draft, sizeof(a->line_draft));
+    FrmGotoForm(SettingsForm);
+}
+
+static void cursor_reset(App *a)
+{
+    a->cursor_deadline = TimGetTicks() + a->cursor_interval;
+    if (!a->cursor_on && (a->appearance.flags & PT_CURSOR_BLINK))
+        pt_call(&a->arm, PT_CURSOR_PHASE, NULL, 0, 1);
+    a->cursor_on = true;
+}
+
+static void cursor_blink(App *a)
+{
+    if (!(a->appearance.flags & PT_CURSOR_BLINK) || a->appearance.shape == PT_CURSOR_HIDDEN)
+        return;
+    UInt32 now = TimGetTicks();
+    if ((Int32)(now - a->cursor_deadline) < 0) return;
+    a->cursor_on = !a->cursor_on;
+    a->cursor_deadline = now + a->cursor_interval;
+    pt_call(&a->arm, PT_CURSOR_PHASE, NULL, 0, a->cursor_on);
+}
+
+static Boolean apply_settings(App *a)
+{
+    if (!MemCmp(&a->appearance, &a->draft, sizeof(a->appearance))) return true;
+    PtBitmap bitmap = {0};
+    if (a->appearance.font != a->draft.font &&
+        !pt_bitmap_open(&bitmap, PT_VIEW_WIDTH, pt_font_height(a->draft.font))) {
+        notice("There is not enough memory for this font size.");
+        return false;
+    }
+    if (a->shell && pt_call(&a->arm, PT_APPEARANCE, &a->draft, 0, a->typing) != PT_OK) {
+        pt_bitmap_close(&bitmap);
+        notice("Could not apply the settings to this session.");
+        return false;
+    }
+    if (bitmap.display) {
+        pt_bitmap_close(&a->terminal);
+        a->terminal = bitmap;
+    }
+    a->appearance = a->draft;
+    a->rows = pt_rows(&a->appearance, a->typing);
+    a->cursor_on = true;
+    cursor_reset(a);
+    if (!pt_settings_save(&a->appearance))
+        notice("Settings applied for this run. Palm OS could not save them.");
+    return true;
+}
+
+static Boolean settings_event(App *a, EventType *event)
+{
+    if (event->eType == ctlSelectEvent) {
+        UInt16 id = event->data.ctlSelect.controlID;
+        if (id == SettingsSave || id == SettingsCancel) {
+            if (id == SettingsSave && !apply_settings(a)) return true;
+            pt_bitmap_close(&a->preview);
+            FrmGotoForm(a->shell ? ShellForm : HomeForm);
+            return true;
+        }
+    }
+    if (!pt_settings_change(&a->draft, event)) return false;
+    pt_settings_draw(&a->arm, &a->draft, &a->preview);
+    return true;
+}
+
 static void shell_draw(App *a, Boolean all)
 {
-    if (!a->row_display || form_id() != ShellForm) return;
-    UInt32 dirty = (UInt32)pt_call(&a->arm, PT_DAMAGE, NULL, 0, 0);
-    if (all) dirty = (1UL << a->rows) - 1;
-    if (!dirty) return;
-    UInt16 old_coords = WinSetCoordinateSystem(kCoordinatesNative);
+    if (!a->terminal.display) return;
+    PtFrame frame = {0};
+    if (pt_call(&a->arm, PT_DAMAGE, &frame, 0, 0) <= 0 && !all) return;
+    if (frame.bell) SndPlaySystemSound(sndInfo);
+    if (form_id() != ShellForm) return;
+
+    UInt32 dirty[2] = {pt_le32(frame.rows), pt_le32(frame.rows + 4)};
+    if (!(dirty[0] || dirty[1] || all)) return;
+    UInt16 coords = WinSetCoordinateSystem(kCoordinatesNative);
+    if (all)
+        pt_paint_rgb(0, 0, PT_VIEW_WIDTH, a->typing ? PT_TYPE_HEIGHT : PT_VIEW_HEIGHT,
+                     a->appearance.background);
+    const UInt16 height = pt_font_height(a->appearance.font);
     for (UInt16 row = 0; row < a->rows; row++) {
-        if ((dirty & (1UL << row)) &&
-            pt_call(&a->arm, PT_RASTER_ROW, a->row_bits, a->row_stride, row) == PT_OK)
-            WinDrawBitmap((BitmapType *)a->row_display, 0, row * 10);
+        if ((all || (dirty[row / 32] & (1UL << (row % 32)))) &&
+            pt_call(&a->arm, PT_RASTER_ROW, a->terminal.bits, a->terminal.stride, row) == PT_OK)
+            WinDrawBitmap((BitmapType *)a->terminal.display, 0, row * height);
     }
-    WinSetCoordinateSystem(old_coords);
+    WinSetCoordinateSystem(coords);
 }
 
 static void term_send(App *a, UInt32 key)
 {
     UInt32 mods = a->ctrl ? PT_CTRL : 0;
+    if (a->appearance.flags & PT_CURSOR_BLINK) cursor_reset(a);
     if (pt_call(&a->arm, PT_INPUT, NULL, mods, key) != PT_OK) SndPlaySystemSound(sndError);
     if (a->ctrl) {
         a->ctrl = false;
@@ -665,9 +741,12 @@ static void shell_controls(App *a, UInt16 action)
         pt_call(&a->arm, PT_SCROLL, NULL, 0, action == ScrollUp ? 8UL : (UInt32)-8);
         shell_draw(a, false);
         break;
+    case ShellSettings:
+        open_settings(a);
+        break;
     case Type:
         a->typing = !a->typing;
-        a->rows = a->typing ? SMALL_ROWS : PT_GRID_ROWS;
+        a->rows = pt_rows(&a->appearance, a->typing);
         if (a->typing) {
             set_field(ShellText, "");
             repaint(0, 130, 160, 16);
@@ -677,7 +756,7 @@ static void shell_controls(App *a, UInt16 action)
         }
         show(ShellText, a->typing);
         show(Send, a->typing);
-        pt_call(&a->arm, PT_RESIZE, NULL, a->rows, PT_GRID_COLS);
+        pt_call(&a->arm, PT_RESIZE, NULL, a->rows, pt_cols(&a->appearance));
         if (a->typing) {
             focus(ShellText);
             SysKeyboardDialog(kbdAlpha);
@@ -708,7 +787,9 @@ static void pump(App *a)
         if (result != PT_PROGRESS) finish_key_job(a, a->key_job, result);
         return;
     }
-    if (!a->pumping || (form_id() != BusyForm && form_id() != ShellForm)) return;
+    UInt16 active = form_id();
+    if (!a->pumping || (active != BusyForm && active != ShellForm && active != SettingsForm))
+        return;
     if (!a->shell && TimGetTicks() - a->timestamp > SysTicksPerSecond() * CONNECT_TIMEOUT) {
         stop(a);
         notice("The SSH connection timed out.");
@@ -744,13 +825,15 @@ static void pump(App *a)
         a->handshake_ticks = TimGetTicks() - a->timestamp;
 #endif
         a->shell = true;
+        a->cursor_on = true;
+        cursor_reset(a);
         FrmGotoForm(ShellForm);
     } else if (result == PT_UNKNOWN_HOST) {
         stop(a);
         FrmGotoForm(TrustForm);
     } else if (result == PT_CHANGED_HOST) {
         stop(a);
-        notice("Host key changed. Verify the new fingerprint before using Forget host key.");
+        notice("Host key changed. Verify the new fingerprint before using Forget host.");
         FrmGotoForm(HomeForm);
     } else if (result < 0 || result == PT_CLOSED || (result == PT_IDLE && network == PT_NET_END)) {
         Int32 reason = network == PT_NET_FAIL ? a->net.error : (Int32)pt_le32(a->detail);
@@ -759,13 +842,31 @@ static void pump(App *a)
         else notice("The SSH connection closed.");
         FrmGotoForm(HomeForm);
     } else if (a->shell) {
-        shell_draw(a, false);
+        if (active == ShellForm) cursor_blink(a);
+        if (active == ShellForm || (a->appearance.flags & PT_AUDIBLE_BELL))
+            shell_draw(a, false);
     }
 }
 
 static void draw_form(App *a, UInt16 id, Boolean opening)
 {
     FormType *form = FrmGetActiveForm();
+    if (id == SettingsForm) {
+        if (opening)
+            pt_bitmap_open(&a->preview, PT_PREVIEW_WIDTH, PT_PREVIEW_HEIGHT);
+        pt_settings_draw(&a->arm, &a->draft, &a->preview);
+        return;
+    }
+    if (opening && id == ShellForm) {
+        if (a->typing) {
+            set_field(ShellText, a->line_draft);
+            pt_wipe(a->line_draft, sizeof(a->line_draft));
+            show(ShellText, true);
+            show(Send, true);
+            focus(ShellText);
+        }
+        if (a->ctrl) CtlSetLabel(object(Ctrl), "Ctrl*");
+    }
     if (opening && id == HomeForm) {
         set_field(Host, a->profile.host);
         set_field(Port, a->profile.port);
@@ -842,6 +943,7 @@ static Boolean on_form(EventType *event)
         draw_form(a, id, event->eType == frmOpenEvent);
         return true;
     }
+    if (id == SettingsForm) return settings_event(a, event);
     if (event->eType == keyDownEvent) {
         if (id == SecretForm) return secret_key(a, event);
         if (id == ShellForm) return shell_key(a, event);
@@ -860,6 +962,7 @@ static Boolean on_form(EventType *event)
             home_input(a);
             if (action == Profiles || action == Keys) go_list(a, action == Keys);
             else if (action == Seed) ask_text(a, InputSeed, "/PALMTERM.SEED");
+            else if (action == HomeSettings) open_settings(a);
             else if (action == ForgetHost) {
                 UInt32 pin = port(a) ? pt_pin_find(a->db, &a->profile, NULL) : 0;
                 if (!pin) notice("No saved host key for this host and port.");
@@ -929,23 +1032,18 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
     a->heap_at_launch = baseline;
 #endif
     a->net.socket = -1;
-    a->rows = PT_GRID_ROWS;
+    pt_settings_load(&a->appearance);
+    a->rows = pt_rows(&a->appearance, 0);
+    a->cursor_interval = SysTicksPerSecond() / 2;
     StrCopy(a->profile.port, "22");
 
     Err result = errNone;
-    UInt16 bitmap_error = errNone;
-    a->row_bitmap = BmpCreate(PT_GRID_COLS * 6, 10, 16, NULL, &bitmap_error);
-    if (a->row_bitmap) {
-        a->row_bits = BmpGetBits(a->row_bitmap);
-        BmpGetDimensions(a->row_bitmap, NULL, NULL, &a->row_stride);
-        if (a->row_bits)
-            a->row_display = BmpCreateBitmapV3(a->row_bitmap, kDensityDouble, a->row_bits, NULL);
-    }
+    pt_bitmap_open(&a->terminal, PT_VIEW_WIDTH, pt_font_height(a->appearance.font));
     a->db = pt_store_open();
     Boolean registered = false, feature = false;
     UInt16 card = 0;
     LocalID db = 0;
-    if (!a->db || !a->row_display || !pt_arm_open(&a->arm) ||
+    if (!a->db || !a->terminal.display || !pt_arm_open(&a->arm) ||
         FtrSet(PT_CREATOR, APP_FEATURE, (UInt32)a)) {
         notice("Palm Terminal could not initialize its native engine or database.");
         result = memErrNotEnoughSpace;
@@ -994,8 +1092,7 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
         FtrUnregister(PT_CREATOR, APP_FEATURE);
     }
     if (a->db) DmCloseDatabase(a->db);
-    if (a->row_display) BmpDelete((BitmapType *)a->row_display);
-    if (a->row_bitmap) BmpDelete(a->row_bitmap);
+    pt_bitmap_close(&a->terminal);
     pt_arm_close(&a->arm);
     pt_wipe(a, sizeof(*a));
     MemPtrFree(a);

@@ -11,7 +11,8 @@
 #endif
 
 #define NET_BUFFER (2 * PT_IO_CHUNK)
-#define SCROLL_LINES 96
+#define HISTORY_ROW_BYTES (PT_GRID_COLS * PT_CELL_BYTES)
+#define HISTORY_MAX_ROWS 192
 #define AUTH_KEY_TYPE "ssh-ed25519"
 
 typedef struct {
@@ -31,11 +32,13 @@ typedef struct {
     uint32_t der_length;
     uint8_t public_blob[51];
     uint8_t fingerprint[32];
-    uint32_t dirty;
-    uint8_t history[SCROLL_LINES][PT_GRID_COLS * PT_CELL_BYTES];
-    unsigned history_next, history_count, history_offset;
+    PtAppearance appearance;
+    uint32_t dirty[2];
+    uint8_t *history[HISTORY_MAX_ROWS];
+    unsigned history_limit, history_next, history_count, history_offset;
     unsigned cols, rows;
     VTermPos cursor;
+    int cursor_phase, bell_pending, alt_screen;
     int cursor_visible, ready, opened, identity_loaded, host_status, host_verified, resize_pending;
     uint32_t key_command;
 } Backend;
@@ -125,8 +128,19 @@ void pt_terminal_dimensions(word32 *cols, word32 *rows, word32 *width, word32 *h
 {
     *cols = session.cols;
     *rows = session.rows;
-    *width = session.cols * 6;
-    *height = session.rows * 10;
+    *width = session.cols * pt_font_width(session.appearance.font);
+    *height = session.rows * pt_font_height(session.appearance.font);
+}
+
+static void damage_row(Backend *s, int row)
+{
+    if (row >= 0 && row < (int)s->rows)
+        s->dirty[(unsigned)row / 32] |= 1u << ((unsigned)row % 32);
+}
+
+static void damage_all(Backend *s)
+{
+    s->dirty[0] = s->dirty[1] = UINT32_MAX;
 }
 
 static int damage(VTermRect rect, void *user)
@@ -134,7 +148,7 @@ static int damage(VTermRect rect, void *user)
     Backend *s = user;
     if (s->history_offset) return 1;
     for (int row = rect.start_row; row < rect.end_row && row < (int)s->rows; row++)
-        if (row >= 0) s->dirty |= 1u << row;
+        damage_row(s, row);
     return 1;
 }
 
@@ -144,8 +158,8 @@ static int cursor(VTermPos pos, VTermPos old, int visible, void *user)
     s->cursor = pos;
     s->cursor_visible = visible;
     if (!s->history_offset) {
-        if (old.row >= 0 && old.row < (int)s->rows) s->dirty |= 1u << old.row;
-        if (pos.row >= 0 && pos.row < (int)s->rows) s->dirty |= 1u << pos.row;
+        damage_row(s, old.row);
+        damage_row(s, pos.row);
     }
     return 1;
 }
@@ -156,52 +170,101 @@ static int term_property(VTermProp prop, VTermValue *value, void *user)
     if (prop == VTERM_PROP_CURSORVISIBLE)
         return cursor(s->cursor, s->cursor, value->boolean, s);
     if (prop == VTERM_PROP_ALTSCREEN) {
+        s->alt_screen = value->boolean;
         s->history_offset = 0;
-        s->dirty = (1u << s->rows) - 1;
+        damage_all(s);
     }
     return 1;
 }
 
-static uint16_t pixel(VTermScreen *screen, VTermColor color)
+static int bell(void *user)
 {
-    vterm_screen_convert_color_to_rgb(screen, &color);
-    return (uint16_t)((color.rgb.red >> 3) << 11 |
-                      (color.rgb.green >> 2) << 5 | color.rgb.blue >> 3);
+    Backend *s = user;
+    s->bell_pending = (s->appearance.flags & PT_AUDIBLE_BELL) != 0;
+    return 1;
 }
 
-static void encode_cell(Backend *s, VTermScreenCell *cell, uint8_t *out, int at_cursor)
+static uint16_t rgb565(unsigned red, unsigned green, unsigned blue)
 {
-    pt_put_le32(out, cell->chars[0] == UINT32_MAX ? 0 : cell->chars[0]);
-    int inverse = cell->attrs.reverse ^ at_cursor;
-    uint16_t fg = pixel(s->screen, inverse ? cell->bg : cell->fg);
-    uint16_t bg = pixel(s->screen, inverse ? cell->fg : cell->bg);
+    return (uint16_t)((red >> 3) << 11 | (green >> 2) << 5 | blue >> 3);
+}
+
+static uint16_t cell_color(VTermScreen *screen, VTermColor color)
+{
+    vterm_screen_convert_color_to_rgb(screen, &color);
+    return rgb565(color.rgb.red, color.rgb.green, color.rgb.blue);
+}
+
+/* Keep default-color and reverse attributes in history so old lines
+ * adopt the current theme. Explicit ANSI colors are stored as RGB565. */
+#define CELL_DEFAULT_FG (UINT32_C(1) << 21)
+#define CELL_DEFAULT_BG (UINT32_C(1) << 22)
+#define CELL_REVERSE    (UINT32_C(1) << 23)
+
+static void encode_cell(Backend *s, const VTermScreenCell *cell, uint8_t *out)
+{
+    uint32_t code = cell->chars[0] == UINT32_MAX ? 0 : cell->chars[0];
+    if (VTERM_COLOR_IS_DEFAULT_FG(&cell->fg)) code |= CELL_DEFAULT_FG;
+    if (VTERM_COLOR_IS_DEFAULT_BG(&cell->bg)) code |= CELL_DEFAULT_BG;
+    if (cell->attrs.reverse) code |= CELL_REVERSE;
+    pt_put_le32(out, code);
+    uint16_t fg = code & CELL_DEFAULT_FG ? 0 : cell_color(s->screen, cell->fg);
+    uint16_t bg = code & CELL_DEFAULT_BG ? 0 : cell_color(s->screen, cell->bg);
     out[4] = (uint8_t)(fg >> 8);
     out[5] = (uint8_t)fg;
     out[6] = (uint8_t)(bg >> 8);
     out[7] = (uint8_t)bg;
 }
 
+static void empty_cell(uint8_t *out)
+{
+    pt_put_le32(out, CELL_DEFAULT_FG | CELL_DEFAULT_BG);
+    memset(out + 4, 0, 4);
+}
+
+static uint8_t *take_oldest_history(Backend *s)
+{
+    unsigned slot = (s->history_next + HISTORY_MAX_ROWS - s->history_count) % HISTORY_MAX_ROWS;
+    uint8_t *row = s->history[slot];
+    s->history[slot] = NULL;
+    s->history_count--;
+    return row;
+}
+
+static void trim_history(Backend *s, unsigned limit)
+{
+    while (s->history_count > limit) free(take_oldest_history(s));
+    if (s->history_offset > s->history_count) {
+        s->history_offset = s->history_count;
+        damage_all(s);
+    }
+}
+
 static int push_history(int cols, const VTermScreenCell *cells, void *user)
 {
     Backend *s = user;
-    uint8_t *row = s->history[s->history_next];
-    memset(row, 0, sizeof(s->history[0]));
-    for (int col = 0; col < cols && col < PT_GRID_COLS; col++) {
-        VTermScreenCell cell = cells[col];
-        encode_cell(s, &cell, row + col * PT_CELL_BYTES, 0);
+    if (!s->history_limit) return 1;
+    uint8_t *row = s->history_count < s->history_limit ? malloc(HISTORY_ROW_BYTES) : NULL;
+    if (!row && s->history_count) row = take_oldest_history(s);
+    if (!row) return 1;
+    s->history[s->history_next] = row;
+    s->history_next = (s->history_next + 1) % HISTORY_MAX_ROWS;
+    s->history_count++;
+    for (int col = 0; col < PT_GRID_COLS; col++, row += PT_CELL_BYTES) {
+        if (col < cols) encode_cell(s, &cells[col], row);
+        else empty_cell(row);
     }
-    s->history_next = (s->history_next + 1) % SCROLL_LINES;
-    if (s->history_count < SCROLL_LINES) s->history_count++;
     if (s->history_offset && s->history_offset < s->history_count) s->history_offset++;
+    else if (s->history_offset) damage_all(s);
     return 1;
 }
 
 static int clear_history(void *user)
 {
     Backend *s = user;
+    trim_history(s, 0);
     s->history_next = 0;
-    s->history_count = 0;
-    s->history_offset = 0;
+    damage_all(s);
     return 1;
 }
 
@@ -209,6 +272,7 @@ static const VTermScreenCallbacks screen_callbacks = {
     .damage = damage,
     .movecursor = cursor,
     .settermprop = term_property,
+    .bell = bell,
     .sb_pushline = push_history,
     .sb_clear = clear_history,
 };
@@ -221,8 +285,14 @@ static void terminal_output(const char *data, size_t count, void *user)
 
 static void *terminal_malloc(size_t size, void *user)
 {
-    (void)user;
+    Backend *s = user;
     void *buf = calloc(1, size);
+    /* libvterm needs room for the old and new grids during a resize. Give
+     * those grids priority over older lines when the native heap is tight. */
+    while (!buf && s->history_count) {
+        trim_history(s, s->history_count - 1);
+        buf = calloc(1, size);
+    }
     if (!buf) abort();
     return buf;
 }
@@ -237,79 +307,218 @@ static VTermAllocatorFunctions terminal_allocator = {
     .malloc = terminal_malloc, .free = terminal_free,
 };
 
+static void terminal_colors(Backend *s)
+{
+    const PtAppearance *a = &s->appearance;
+    VTermColor text, background;
+    vterm_color_rgb(&text, a->text[0], a->text[1], a->text[2]);
+    vterm_color_rgb(&background, a->background[0], a->background[1], a->background[2]);
+    vterm_screen_set_default_colors(s->screen, &text, &background);
+    vterm_state_set_bold_highbright(vterm_obtain_state(s->vterm),
+                                  (a->flags & PT_BRIGHT_BOLD) != 0);
+}
+
 static int terminal_open(Backend *s)
 {
+    s->history_limit = pt_history_limit(s->appearance.history);
     s->vterm = vterm_new_with_allocator((int)s->rows, (int)s->cols,
-                                        &terminal_allocator, NULL);
+                                        &terminal_allocator, s);
     if (!s->vterm) return -1;
     vterm_set_utf8(s->vterm, 1);
     vterm_output_set_callback(s->vterm, terminal_output, s);
     s->screen = vterm_obtain_screen(s->vterm);
     if (!s->screen) return -1;
-    VTermColor text, background;
-    vterm_color_rgb(&text, 232, 232, 232);
-    vterm_color_rgb(&background, 0, 0, 0);
-    vterm_state_set_default_colors(vterm_obtain_state(s->vterm), &text, &background);
+    terminal_colors(s);
     vterm_screen_set_callbacks(s->screen, &screen_callbacks, s);
     vterm_screen_enable_altscreen(s->screen, 1);
     vterm_screen_set_damage_merge(s->screen, VTERM_DAMAGE_ROW);
     vterm_screen_reset(s->screen, 1);
-    s->dirty = (1u << s->rows) - 1;
+    s->cursor_phase = 1;
+    damage_all(s);
     return 0;
+}
+
+static int resize_terminal(Backend *s, unsigned rows, unsigned cols)
+{
+    if (!s->vterm || !rows || rows > PT_GRID_ROWS || !cols || cols > PT_GRID_COLS)
+        return PT_ERROR;
+    if (rows != s->rows || cols != s->cols) {
+        s->rows = rows;
+        s->cols = cols;
+        vterm_set_size(s->vterm, (int)rows, (int)cols);
+        vterm_state_get_cursorpos(vterm_obtain_state(s->vterm), &s->cursor);
+        s->resize_pending = 1;
+    }
+    damage_all(s);
+    return PT_OK;
+}
+
+static int set_appearance(Backend *s, const PtAppearance *appearance, int typing)
+{
+    if (!s->screen || !pt_appearance_valid(appearance)) return PT_ERROR;
+    s->history_limit = pt_history_limit(appearance->history);
+    trim_history(s, s->history_limit);
+    s->appearance = *appearance;
+    terminal_colors(s);
+    s->cursor_phase = 1;
+    if (!(s->appearance.flags & PT_AUDIBLE_BELL)) s->bell_pending = 0;
+    return resize_terminal(s, pt_rows(appearance, typing), pt_cols(appearance));
 }
 
 static int get_row(Backend *s, unsigned row, uint8_t *out)
 {
     if (!s->screen || row >= s->rows) return PT_ERROR;
     if (row < s->history_offset) {
-        unsigned slot = (s->history_next + SCROLL_LINES - s->history_offset + row) % SCROLL_LINES;
+        unsigned slot = (s->history_next + HISTORY_MAX_ROWS - s->history_offset + row) %
+                        HISTORY_MAX_ROWS;
         memcpy(out, s->history[slot], s->cols * PT_CELL_BYTES);
         return PT_OK;
     }
     row -= s->history_offset;
-    for (unsigned col = 0; col < s->cols; col++) {
+    for (unsigned col = 0; col < s->cols; col++, out += PT_CELL_BYTES) {
         VTermPos pos = {(int)row, (int)col};
-        VTermScreenCell cell;
-        memset(&cell, 0, sizeof(cell));
-        if (vterm_screen_get_cell(s->screen, pos, &cell))
-            encode_cell(s, &cell, out + col * PT_CELL_BYTES,
-                        !s->history_offset && s->cursor_visible &&
-                        pos.row == s->cursor.row && pos.col == s->cursor.col);
-        else
-            memset(out + col * PT_CELL_BYTES, 0, PT_CELL_BYTES);
+        VTermScreenCell cell = {0};
+        if (vterm_screen_get_cell(s->screen, pos, &cell)) encode_cell(s, &cell, out);
+        else empty_cell(out);
     }
     return PT_OK;
 }
 
 #ifdef PT_ARMLET
-/* Read cells and draw into the Palm row bitmap in the same native call. */
+static const uint8_t *glyph_for(unsigned font, uint32_t code)
+{
+    const int line = code >= 0x2500 && code <= 0x259f;
+    unsigned i = line ? code - 0x2500 : code == 0 ? 0 :
+                 code >= 32 && code <= 255 ? code - 32 : '?' - 32;
+    switch (font) {
+    case PT_FONT_SMALL: return line ? line_5x8[i] : latin_5x8[i];
+    case PT_FONT_LARGE: return line ? line_8x13[i] : latin_8x13[i];
+    default: return line ? line_6x10[i] : latin_6x10[i];
+    }
+}
+
+static uint16_t swap565(uint16_t color)
+{
+    /* Store big-endian Palm RGB565 using an ARM little-endian halfword. */
+    return (uint16_t)((color >> 8) | (color << 8));
+}
+
+static uint16_t rgb(const uint8_t color[3])
+{
+    return rgb565(color[0], color[1], color[2]);
+}
+
+static uint16_t contrasting_color(uint16_t color)
+{
+    unsigned light = 2 * ((color >> 11) & 31u) + 3 * ((color >> 5) & 63u) +
+                     (color & 31u);
+    return light > 141 ? 0 : UINT16_MAX;
+}
+
+static inline void paint_fixed_glyph(uint16_t *dest, unsigned pitch, unsigned width,
+                                    unsigned height, const uint8_t *glyph, uint16_t fg, uint16_t bg)
+{
+    fg = swap565(fg);
+    bg = swap565(bg);
+    for (unsigned y = 0; y < height; y++, dest += pitch) {
+        unsigned bits = glyph[y];
+        for (unsigned x = 0; x < width; x++, bits <<= 1)
+            dest[x] = (bits & 0x80) ? fg : bg;
+    }
+}
+
+static void paint_glyph(uint16_t *dest, unsigned pitch, unsigned font,
+                        const uint8_t *glyph, uint16_t fg, uint16_t bg)
+{
+    /* Constant dimensions let the compiler unroll the inner pixel loop. */
+    switch (font) {
+    case PT_FONT_SMALL: paint_fixed_glyph(dest, pitch, 5, 8, glyph, fg, bg); break;
+    case PT_FONT_LARGE: paint_fixed_glyph(dest, pitch, 8, 13, glyph, fg, bg); break;
+    default: paint_fixed_glyph(dest, pitch, 6, 10, glyph, fg, bg); break;
+    }
+}
+
+static void paint_cursor(uint16_t *dest, unsigned pitch, const PtAppearance *a,
+                         const uint8_t *glyph, uint16_t fg, uint16_t bg)
+{
+    const unsigned width = pt_font_width(a->font), height = pt_font_height(a->font);
+    const int automatic = (a->flags & PT_CURSOR_AUTO) != 0;
+    uint16_t color = automatic ? fg : rgb(a->cursor);
+    if (automatic && color == bg) color = contrasting_color(bg);
+    if (a->shape == PT_CURSOR_BLOCK) {
+        paint_glyph(dest, pitch, a->font, glyph,
+                    automatic && fg != bg ? bg : contrasting_color(color), color);
+        return;
+    }
+    paint_glyph(dest, pitch, a->font, glyph, fg, bg);
+    color = swap565(color);
+    if (a->shape == PT_CURSOR_UNDERLINE) {
+        for (unsigned x = 0; x < width; x++) dest[(height - 1) * pitch + x] = color;
+    } else if (a->shape == PT_CURSOR_BAR) {
+        for (unsigned y = 0; y < height; y++) dest[y * pitch] = color;
+    }
+}
+
+static int bitmap_valid(const void *bitmap, uint32_t stride, unsigned width)
+{
+    return bitmap && stride >= width * 2 && !(((uintptr_t)bitmap | stride) & 1u);
+}
+
 static int raster_row(Backend *s, unsigned row, void *bitmap, uint32_t stride)
 {
-    if (!bitmap || stride < PT_GRID_COLS * 6 * 2 || ((uintptr_t)bitmap | stride) & 1)
-        return PT_ERROR;
-    uint8_t cells[PT_GRID_COLS * PT_CELL_BYTES] = {0};
+    if (!bitmap_valid(bitmap, stride, PT_VIEW_WIDTH)) return PT_ERROR;
+    uint8_t cells[PT_GRID_COLS * PT_CELL_BYTES];
     int rc = get_row(s, row, cells);
     if (rc != PT_OK) return rc;
 
-    for (unsigned col = 0; col < PT_GRID_COLS; col++) {
-        const uint8_t *cell = cells + col * PT_CELL_BYTES;
-        uint32_t code = pt_le32(cell);
-        const uint8_t *glyph = latin_glyphs[0];
-        if (code >= 32 && code <= 255) glyph = latin_glyphs[code - 32];
-        else if (code >= 0x2500 && code <= 0x259f) glyph = line_glyphs[code - 0x2500];
-        else if (code) glyph = latin_glyphs['?' - 32];
+    const PtAppearance *a = &s->appearance;
+    const unsigned width = pt_font_width(a->font), height = pt_font_height(a->font);
+    const unsigned pitch = stride / 2;
+    uint16_t *pixels = bitmap;
+    const uint16_t text = rgb(a->text), background = rgb(a->background);
+    int cursor_col = !s->history_offset && s->cursor_visible && s->cursor_phase &&
+                     a->shape != PT_CURSOR_HIDDEN && s->cursor.row == (int)row ?
+                     s->cursor.col : -1;
 
-        /* Palm's bitmap stores big-endian RGB565. The ARM stores each
-         * halfword little-endian, so build the swapped values once. */
-        uint16_t fg = (uint16_t)(cell[5] << 8 | cell[4]);
-        uint16_t bg = (uint16_t)(cell[7] << 8 | cell[6]);
-        for (unsigned y = 0; y < 10; y++) {
-            uint16_t *pixels = (uint16_t *)((uint8_t *)bitmap + y * stride) + col * 6;
-            uint8_t bits = glyph[y];
-            for (unsigned x = 0; x < 6; x++, bits <<= 1)
-                pixels[x] = (bits & 0x80) ? fg : bg;
+    for (unsigned col = 0; col < s->cols; col++) {
+        const uint8_t *cell = cells + col * PT_CELL_BYTES;
+        const uint32_t code = pt_le32(cell);
+        uint16_t fg = code & CELL_DEFAULT_FG ? text : (uint16_t)(cell[4] << 8 | cell[5]);
+        uint16_t bg = code & CELL_DEFAULT_BG ? background : (uint16_t)(cell[6] << 8 | cell[7]);
+        if (code & CELL_REVERSE) {
+            uint16_t swap = fg;
+            fg = bg;
+            bg = swap;
         }
+        const uint8_t *glyph = glyph_for(a->font, code & PT_CELL_CODE_MASK);
+        if ((int)col == cursor_col) paint_cursor(pixels + col * width, pitch, a, glyph, fg, bg);
+        else paint_glyph(pixels + col * width, pitch, a->font, glyph, fg, bg);
     }
+    for (unsigned y = 0; y < height; y++)
+        for (unsigned x = s->cols * width; x < PT_VIEW_WIDTH; x++)
+            pixels[y * pitch + x] = swap565(background);
+    return PT_OK;
+}
+
+static int raster_preview(const PtPreview *preview, uint32_t stride)
+{
+    const PtAppearance *a = &preview->appearance;
+    uint16_t *pixels = (uint16_t *)(uintptr_t)pt_le32(preview->pixels);
+    if (!pt_appearance_valid(a) || !bitmap_valid(pixels, stride, PT_PREVIEW_WIDTH))
+        return PT_ERROR;
+
+    const uint16_t fg = rgb(a->text), bg = rgb(a->background);
+    const unsigned width = pt_font_width(a->font), height = pt_font_height(a->font);
+    const unsigned pitch = stride / 2;
+    for (unsigned y = 0; y < PT_PREVIEW_HEIGHT; y++)
+        for (unsigned x = 0; x < PT_PREVIEW_WIDTH; x++) pixels[y * pitch + x] = swap565(bg);
+
+    static const char sample[] = "$ echo hello";
+    pixels += ((PT_PREVIEW_HEIGHT - height) / 2) * pitch + 8;
+    for (unsigned i = 0; i < sizeof(sample) - 1; i++)
+        paint_glyph(pixels + i * width, pitch, a->font,
+                    glyph_for(a->font, (uint8_t)sample[i]), fg, bg);
+    paint_cursor(pixels + (sizeof(sample) - 1) * width, pitch, a, glyph_for(a->font, 0), fg, bg);
     return PT_OK;
 }
 #endif
@@ -330,6 +539,7 @@ static void disconnect(Backend *s)
     if (s->ssh) wolfSSH_free(s->ssh);
     if (s->context) wolfSSH_CTX_free(s->context);
     if (s->vterm) vterm_free(s->vterm);
+    trim_history(s, 0);
     int ready = s->ready;
     pt_wipe(s, sizeof(*s));
     s->ready = ready;
@@ -347,11 +557,11 @@ void pt_reset_after_fault(void)
 
 static int connect_start(Backend *s, const PtLogin *login)
 {
-    if (s->ssh || !login->user[0] || !login->rows || !login->cols ||
-        login->rows > PT_GRID_ROWS || login->cols > PT_GRID_COLS) return PT_ERROR;
+    if (s->ssh || !login->user[0] || !pt_appearance_valid(&login->appearance)) return PT_ERROR;
     s->login = *login;
-    s->cols = login->cols;
-    s->rows = login->rows;
+    s->appearance = login->appearance;
+    s->cols = pt_cols(&s->appearance);
+    s->rows = pt_rows(&s->appearance, 0);
     if (login->key_auth && login->pinned) {
         if (!s->identity_loaded) return PT_BAD_KEY;
         int length = pt_key_der(&s->identity, s->der, sizeof(s->der));
@@ -427,7 +637,10 @@ static int step(Backend *s, uint8_t *details)
 
     if (s->resize_pending) {
         /* CHANGE-TERMINAL-SIZE bundles the whole request before the send. */
-        int rc = wolfSSH_ChangeTerminalSize(s->ssh, s->cols, s->rows, s->cols * 6, s->rows * 10);
+        const unsigned font = s->appearance.font;
+        int rc = wolfSSH_ChangeTerminalSize(s->ssh, s->cols, s->rows,
+                                            s->cols * pt_font_width(font),
+                                            s->rows * pt_font_height(font));
         if (rc == WS_SUCCESS || rc == WS_WANT_WRITE) s->resize_pending = 0;
     }
     if (s->typed.count) {
@@ -448,6 +661,10 @@ static int step(Backend *s, uint8_t *details)
         if (stderr_count > 0) rc = stderr_count;
     }
     if (rc > 0) {
+        if (s->history_offset && (s->appearance.flags & PT_FOLLOW_OUTPUT)) {
+            s->history_offset = 0;
+            damage_all(s);
+        }
         vterm_input_write(s->vterm, (const char *)text, (size_t)rc);
         vterm_screen_flush_damage(s->screen);
         return PT_PROGRESS;
@@ -470,7 +687,7 @@ static int keyboard(Backend *s, uint32_t key, uint32_t modifiers)
     };
     if (s->history_offset) {
         s->history_offset = 0;
-        s->dirty = (1u << s->rows) - 1;
+        damage_all(s);
     }
     if (key < PT_UP) vterm_keyboard_unichar(s->vterm, key, (VTermModifier)modifiers);
     else if (key - PT_UP < sizeof(special) / sizeof(special[0]))
@@ -549,33 +766,43 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
     case PT_STEP:
         return step(s, buffer);
     case PT_RESIZE:
-        if (!s->vterm || !size || size > PT_GRID_ROWS || !value || value > PT_GRID_COLS)
-            return PT_ERROR;
-        s->rows = size;
-        s->cols = value;
-        vterm_set_size(s->vterm, (int)size, (int)value);
-        s->resize_pending = 1;
-        s->dirty = (1u << s->rows) - 1;
+        return resize_terminal(s, size, value);
+    case PT_APPEARANCE:
+        return set_appearance(s, buffer, value != 0);
+    case PT_CURSOR_PHASE:
+        if (s->cursor_phase != (value != 0)) {
+            s->cursor_phase = value != 0;
+            if (s->cursor_visible && !s->history_offset && s->appearance.shape != PT_CURSOR_HIDDEN)
+                damage_row(s, s->cursor.row);
+        }
         return PT_OK;
     case PT_INPUT:
         return keyboard(s, value, size);
     case PT_DAMAGE: {
-        uint32_t result = s->dirty;
-        s->dirty = 0;
-        return (int32_t)result;
+        PtFrame *frame = buffer;
+        pt_put_le32(frame->rows, s->dirty[0]);
+        pt_put_le32(frame->rows + 4, s->dirty[1]);
+        frame->bell = (uint8_t)s->bell_pending;
+        int ready = s->dirty[0] || s->dirty[1] || s->bell_pending;
+        s->dirty[0] = s->dirty[1] = 0;
+        s->bell_pending = 0;
+        return ready;
     }
     case PT_ROW:
         return get_row(s, value, buffer);
 #ifdef PT_ARMLET
     case PT_RASTER_ROW:
         return raster_row(s, value, buffer, size);
+    case PT_RASTER_PREVIEW:
+        return raster_preview(buffer, size);
 #endif
     case PT_SCROLL: {
+        if (s->alt_screen) return 0;
         int offset = (int)s->history_offset + (int32_t)value;
         if (offset < 0) offset = 0;
         if (offset > (int)s->history_count) offset = (int)s->history_count;
         s->history_offset = (unsigned)offset;
-        s->dirty = (1u << s->rows) - 1;
+        damage_all(s);
         return offset;
     }
     default:

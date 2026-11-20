@@ -2,6 +2,7 @@
 #define PALM_TERMINAL_NATIVE_H
 #include <stddef.h>
 #include <stdint.h>
+#include "appearance.h"
 
 #define PT_SEED_SIZE 48
 #define PT_SEED_STATE 128
@@ -12,16 +13,16 @@
 #define PT_LOGIN_MAX 64
 #define PT_HOST_MAX 96
 #define PT_IO_CHUNK 4096
-#define PT_GRID_COLS 53
-#define PT_GRID_ROWS 29
 #define PT_CELL_BYTES 8
 #define PT_CTRL 4
+#define PT_CELL_CODE_MASK 0x1fffffUL
 
 enum PtCommand {
     PT_BOOT = 1, PT_IMPORT_SEED, PT_NEXT_SEED, PT_USE_SEED, PT_FORGET_SEED,
     PT_KEY_IMPORT, PT_KEY_GENERATE, PT_KEY_UNLOCK, PT_KEY_SAVE, PT_CLEAR_KEY,
     PT_CONNECT, PT_STOP, PT_FEED, PT_DRAIN, PT_STEP, PT_RESIZE, PT_INPUT,
-    PT_DAMAGE, PT_ROW, PT_SCROLL, PT_KEY_STEP, PT_STATS, PT_RASTER_ROW
+    PT_DAMAGE, PT_ROW, PT_SCROLL, PT_KEY_STEP, PT_STATS, PT_RASTER_ROW,
+    PT_APPEARANCE, PT_CURSOR_PHASE, PT_RASTER_PREVIEW
 };
 enum PtResult {
     PT_OK = 0, PT_PROGRESS = 1, PT_CONNECTED = 2, PT_CLOSED = 3,
@@ -40,9 +41,18 @@ typedef struct {
     uint8_t fingerprint[32];
     uint8_t pinned;
     uint8_t key_auth;
-    uint8_t cols;
-    uint8_t rows;
+    PtAppearance appearance;
 } PtLogin;
+
+typedef struct {
+    uint8_t rows[8];
+    uint8_t bell;
+} PtFrame;
+
+typedef struct {
+    PtAppearance appearance;
+    uint8_t pixels[4];
+} PtPreview;
 
 typedef struct {
     uint8_t file[PT_KEY_FILE_MAX];

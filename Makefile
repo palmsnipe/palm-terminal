@@ -20,7 +20,7 @@ ELF := $(BUILD_DIR)/code0001.68k.elf
 CODE := $(BUILD_DIR)/code0001.bin
 RESOURCES := $(BUILD_DIR)/$(APP_ID).ro
 PRC := $(BUILD_DIR)/$(APP_ID).prc
-OBJECTS := $(addprefix $(BUILD_DIR)/,main.o bridge.o storage.o network.o startup.o)
+OBJECTS := $(addprefix $(BUILD_DIR)/,main.o bridge.o storage.o network.o settings.o startup.o)
 DEPS := $(OBJECTS:.o=.d)
 
 SDK_INCLUDES := -isystem$(SDK) -isystem$(SDK)/Core \
@@ -112,7 +112,7 @@ $(BUILD_DIR)/bcrypt-pbkdf.c: tools/ports.py $(DEP_ROOT)/.ready | $(BUILD_DIR)
 	python3 $< bcrypt $(DEP_ROOT) $@
 
 $(BUILD_DIR)/terminal-font.h: tools/font.py $(DEP_ROOT)/.ready | $(BUILD_DIR)
-	python3 $< $(DEP_ROOT)/font/6x10.bdf $@
+	python3 $< $(DEP_ROOT)/font $@
 
 $(BUILD_DIR)/arm.bin: $(BUILD_DIR)/ssh-internal.c $(BUILD_DIR)/bcrypt-pbkdf.c $(BUILD_DIR)/terminal-font.h $(wildcard src/*.h src/freestanding/*.h src/bcrypt/*.h) \
 		src/backend.c src/key.c src/entropy.c src/arm_runtime.c src/arm_entry.S src/blowfish_arm.S armlet.lkr Makefile

@@ -136,7 +136,7 @@ static int exercise(int sock, unsigned port, PtLogin *login, PtKeyIO *key, const
         } else if (status == PT_PROGRESS && phase == 1) {
             if (pt_dispatch(PT_ROW, row, sizeof(row), 0) == PT_OK) {
                 char decoded[PT_GRID_COLS + 1] = {0};
-                for (unsigned col = 0; col < PT_GRID_COLS; col++)
+                for (unsigned col = 0; col < pt_cols(&login->appearance); col++)
                     decoded[col] = (char)pt_le32(row + col * PT_CELL_BYTES);
                 if (!strncmp(decoded, "verified-shell", 14)) {
                     close(sock);
@@ -169,7 +169,7 @@ int main(int argc, char **argv)
     }
     check(argc == 6, "Usage: shell port user key-file-or-dash secret");
     unsigned port = (unsigned)strtoul(argv[2], NULL, 10);
-    PtLogin login = {.cols = PT_GRID_COLS, .rows = PT_GRID_ROWS};
+    PtLogin login = {.appearance = pt_appearance_default()};
     PtKeyIO key = {0};
     snprintf(login.user, sizeof(login.user), "%s", argv[3]);
     login.key_auth = strcmp(argv[4], "-") != 0;

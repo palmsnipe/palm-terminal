@@ -16,7 +16,8 @@ BEGIN
     BUTTON "Profiles" ID Profiles AT (84 104 68 15)
     BUTTON "Keys" ID Keys AT (8 123 68 15)
     BUTTON "Seed setup" ID Seed AT (84 123 68 15)
-    BUTTON "Forget host key" ID ForgetHost AT (8 142 144 14)
+    BUTTON "Settings" ID HomeSettings AT (8 142 68 14)
+    BUTTON "Forget host" ID ForgetHost AT (84 142 68 14)
 END
 
 FORM ID ListForm AT (0 0 160 160)
@@ -66,13 +67,46 @@ FORM ID ShellForm AT (0 0 160 160)
 BEGIN
     FIELD ID ShellText AT (1 131 115 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 255 NONUSABLE
     BUTTON "Send" ID Send AT (119 131 39 14) NONUSABLE
-    BUTTON "Ctrl" ID Ctrl AT (1 146 24 13)
-    BUTTON "Esc" ID Esc AT (26 146 23 13)
-    BUTTON "Tab" ID Tab AT (50 146 23 13)
-    BUTTON "^" ID ScrollUp AT (74 146 14 13)
-    BUTTON "v" ID ScrollDown AT (89 146 14 13)
-    BUTTON "Type" ID Type AT (104 146 27 13)
-    BUTTON "End" ID End AT (132 146 26 13)
+    BUTTON "Ctrl" ID Ctrl AT (1 146 23 13)
+    BUTTON "Esc" ID Esc AT (25 146 19 13)
+    BUTTON "Tab" ID Tab AT (45 146 19 13)
+    BUTTON "^" ID ScrollUp AT (65 146 12 13)
+    BUTTON "v" ID ScrollDown AT (78 146 12 13)
+    BUTTON "Type" ID Type AT (91 146 22 13)
+    BUTTON "Prefs" ID ShellSettings AT (114 146 23 13)
+    BUTTON "End" ID End AT (138 146 21 13)
+END
+
+FORM ID SettingsForm AT (0 0 160 160)
+BEGIN
+    TITLE "Terminal Settings"
+    LABEL "Font size" AUTOID AT (8 20) FONT 0
+    POPUPTRIGGER "Regular (6x10)" ID SettingsFont AT (60 17 92 14) LEFTANCHOR
+    LIST "Regular (6x10)" "Small (5x8)" "Large (8x13)" ID SettingsFontList AT (58 18 94 41) VISIBLEITEMS 3 NONUSABLE
+    POPUPLIST ID SettingsFont SettingsFontList
+
+    LABEL "Cursor" AUTOID AT (8 37) FONT 0
+    POPUPTRIGGER "Block" ID SettingsShape AT (49 34 61 14) LEFTANCHOR
+    LIST "Block" "Underline" "Bar" "Hidden" ID SettingsShapeList AT (46 34 68 52) VISIBLEITEMS 4 NONUSABLE
+    POPUPLIST ID SettingsShape SettingsShapeList
+    CHECKBOX "Blink" ID SettingsBlink AT (113 34 40 14)
+
+    BUTTON "Text" ID SettingsText AT (8 52 37 14)
+    BUTTON "Background" ID SettingsBackground AT (50 52 60 14)
+    BUTTON "Cursor" ID SettingsCursor AT (115 52 39 14)
+    CHECKBOX "Cursor matches text" ID SettingsMatch AT (8 78 140 12)
+
+    LABEL "Scrollback" AUTOID AT (8 94) FONT 0
+    POPUPTRIGGER "96 lines" ID SettingsHistory AT (60 91 92 14) LEFTANCHOR
+    LIST "Off" "48 lines" "96 lines" "192 lines" ID SettingsHistoryList AT (58 88 94 52) VISIBLEITEMS 4 NONUSABLE
+    POPUPLIST ID SettingsHistory SettingsHistoryList
+
+    CHECKBOX "Follow output" ID SettingsFollow AT (8 106 88 14)
+    CHECKBOX "Bell" ID SettingsBell AT (113 106 39 14)
+    CHECKBOX "Bright ANSI bold" ID SettingsBold AT (8 119 139 12)
+    BUTTON "Defaults" ID SettingsDefaults AT (8 144 43 14)
+    BUTTON "Cancel" ID SettingsCancel AT (60 144 42 14)
+    BUTTON "Save" ID SettingsSave AT (111 144 42 14)
 END
 
 ALERT ID InfoAlert

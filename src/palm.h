@@ -19,6 +19,13 @@ typedef struct {
 } PtArm;
 
 typedef struct {
+    BitmapType *bitmap;
+    BitmapTypeV3 *display;
+    void *bits;
+    UInt16 stride;
+} PtBitmap;
+
+typedef struct {
     Char host[PT_HOST_MAX];
     Char user[PT_LOGIN_MAX];
     Char port[6];
@@ -43,6 +50,14 @@ Boolean pt_arm_open(PtArm *arm);
 void pt_arm_close(PtArm *arm);
 Int32 pt_call(const PtArm *arm, UInt32 command, void *buffer, UInt32 size, UInt32 value);
 void pt_wipe(void *p, size_t size);
+
+Boolean pt_bitmap_open(PtBitmap *bitmap, UInt16 width, UInt16 height);
+void pt_bitmap_close(PtBitmap *bitmap);
+void pt_settings_load(PtAppearance *appearance);
+Boolean pt_settings_save(const PtAppearance *appearance);
+void pt_settings_draw(const PtArm *arm, const PtAppearance *appearance, PtBitmap *preview);
+Boolean pt_settings_change(PtAppearance *appearance, const EventType *event);
+void pt_paint_rgb(Coord x, Coord y, Coord width, Coord height, const uint8_t rgb[3]);
 
 DmOpenRef pt_store_open(void);
 Boolean pt_record_read(DmOpenRef db, UInt32 id, UInt8 type, void *out, UInt16 length);

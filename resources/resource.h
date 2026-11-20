@@ -9,6 +9,7 @@
 #define Keys 1106
 #define Seed 1107
 #define ForgetHost 1108
+#define HomeSettings 1109
 
 #define ListForm 1200
 #define Items 1201
@@ -38,7 +39,26 @@
 #define End 1607
 #define ShellText 1608
 #define Send 1609
-#define Keyboard 1610
+#define ShellSettings 1610
 #define BusyForm 1700
 #define InfoAlert 1800
 #define ConfirmAlert 1801
+
+#define SettingsForm 1900
+#define SettingsFont 1901
+#define SettingsFontList 1902
+#define SettingsShape 1903
+#define SettingsShapeList 1904
+#define SettingsBlink 1905
+#define SettingsText 1906
+#define SettingsBackground 1907
+#define SettingsCursor 1908
+#define SettingsMatch 1909
+#define SettingsHistory 1910
+#define SettingsHistoryList 1911
+#define SettingsFollow 1912
+#define SettingsBell 1913
+#define SettingsBold 1914
+#define SettingsDefaults 1915
+#define SettingsCancel 1916
+#define SettingsSave 1917
