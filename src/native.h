@@ -42,6 +42,7 @@ typedef struct {
     uint8_t pinned;
     uint8_t key_auth;
     PtAppearance appearance;
+    PtGrid grid;
 } PtLogin;
 
 typedef struct {

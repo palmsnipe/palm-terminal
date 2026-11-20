@@ -1,13 +1,18 @@
 #include "palm.h"
 #include <Chars.h>
+#include <Graffiti.h>
 #include <Keyboard.h>
 #include <NotifyMgr.h>
+#include <PenInputMgr.h>
 #include "resource.h"
 
 #define APP_FEATURE 0
 #define PAGE_SIZE 5
 #define SLEEP_EVENT (firstUserEvent + 1)
+#define SSH_ENDED_EVENT (firstUserEvent + 2)
 #define CONNECT_TIMEOUT 45UL
+#define SHELL_TOOLBAR 15
+#define SHELL_LINE 15
 
 enum { InputSeed, InputImport, InputName, InputPublic };
 enum { RemotePassword, KeyUnlock, ImportPassword, ProtectKey, ConfirmProtection };
@@ -27,9 +32,15 @@ typedef struct {
     Char rows_text[PAGE_SIZE][42];
     Char *choices[PAGE_SIZE];
     UInt32 target_key, timestamp, cursor_deadline;
-    UInt16 page, row_count, file_size, text_action, secret_action, rows, key_job, cursor_interval;
+    UInt32 pin_version;
+    Int32 ssh_end_reason;
+    PtGrid grid;
+    RectangleType drawn_bounds;
+    UInt16 page, row_count, file_size, text_action, secret_action, key_job, cursor_interval;
+    UInt16 view_width, view_height, input_area, bitmap_width, drawn_orientation;
     Boolean listing_keys, more, generating, pumping, ssh_started, shell, ctrl, typing, stopped;
     Boolean sleep_pending, deferred_sleep, cursor_on;
+    Boolean dia, can_rotate, fullscreen, bar_hidden;
 #ifdef PT_PROFILE
     UInt32 heap_at_launch, handshake_ticks, key_ticks;
 #endif
@@ -99,6 +110,79 @@ static void focus(UInt16 id)
 {
     UInt16 index = object_index(id);
     if (index != frmInvalidObjectId) FrmSetFocus(FrmGetActiveForm(), index);
+}
+
+static RectangleType display_bounds(void)
+{
+    RectangleType bounds;
+    WinGetBounds(WinGetDisplayWindow(), &bounds);
+    return bounds;
+}
+
+static void post_display_change(void)
+{
+    EventType event = {.eType = winDisplayChangedEvent};
+    EvtAddUniqueEventToQueue(&event, 0, true);
+}
+
+static Err on_display_change(SysNotifyParamType *parameters)
+{
+    (void)parameters;
+    post_display_change();
+    return errNone;
+}
+
+static void display_features(App *a)
+{
+    UInt32 flags = 0;
+    if (FtrGet(pinCreator, pinFtrAPIVersion, &a->pin_version) || !a->pin_version) return;
+    if (a->pin_version < pinAPIVersion1_1) {
+        a->dia = true;
+    } else if (!FtrGet(sysFtrCreator, sysFtrNumInputAreaFlags, &flags)) {
+        a->dia = (flags & grfFtrInputAreaFlagCollapsible) != 0;
+        a->can_rotate = (flags & grfFtrInputAreaFlagLandscape) != 0;
+    }
+}
+
+static void configure_form(App *a, FormType *form)
+{
+    if (!a->dia && !a->can_rotate) return;
+    FrmSetDIAPolicyAttr(form, frmDIAPolicyCustom);
+    WinSetConstraintsSize(FrmGetWindowHandle(form), 160, 160, 240, 160, 160, 240);
+}
+
+static void leave_fullscreen(App *a)
+{
+    if (!a->fullscreen) return;
+    a->fullscreen = false;
+    if (a->bar_hidden) {
+        StatShow();
+        a->bar_hidden = false;
+    }
+    if (a->dia) {
+        if (a->input_area <= pinInputAreaClosed) PINSetInputAreaState(a->input_area);
+        PINSetInputTriggerState(pinInputTriggerEnabled);
+    }
+}
+
+static void enter_fullscreen(App *a)
+{
+    a->fullscreen = true;
+    if (!a->dia) return;
+    a->input_area = PINGetInputAreaState();
+    PINSetInputAreaState(pinInputAreaClosed);
+    PINSetInputTriggerState(pinInputTriggerDisabled);
+    if (a->pin_version >= pinAPIVersion1_1) {
+        UInt32 visible;
+        if (StatGetAttribute(statAttrBarVisible, &visible) == errNone && visible)
+            a->bar_hidden = StatHide() == errNone;
+    }
+}
+
+static UInt16 shell_height(const App *a, const RectangleType *bounds)
+{
+    return 2 * (bounds->extent.y - (a->fullscreen ? 0 : SHELL_TOOLBAR +
+                                      (a->typing ? SHELL_LINE : 0)));
 }
 
 static void notice(const Char *message)
@@ -204,6 +288,7 @@ static void stop(App *a)
 #ifdef PT_PROFILE
     if (a->shell) record_profile(a, "/PT-SSH.TXT", a->handshake_ticks);
 #endif
+    leave_fullscreen(a);
     a->pumping = false;
     a->key_job = 0;
     a->ssh_started = false;
@@ -212,7 +297,7 @@ static void stop(App *a)
     a->ctrl = false;
     pt_wipe(a->line_draft, sizeof(a->line_draft));
     pt_bitmap_close(&a->preview);
-    a->rows = pt_rows(&a->appearance, 0);
+    a->grid = (PtGrid){0};
     pt_net_close(&a->net);
     pt_call(&a->arm, PT_STOP, NULL, 0, 0);
     clear_credentials(a);
@@ -619,16 +704,20 @@ static void cursor_blink(App *a)
     pt_call(&a->arm, PT_CURSOR_PHASE, NULL, 0, a->cursor_on);
 }
 
+static void draw_form(App *a, UInt16 id, Boolean opening);
+
 static Boolean apply_settings(App *a)
 {
     if (!MemCmp(&a->appearance, &a->draft, sizeof(a->appearance))) return true;
     PtBitmap bitmap = {0};
     if (a->appearance.font != a->draft.font &&
-        !pt_bitmap_open(&bitmap, PT_VIEW_WIDTH, pt_font_height(a->draft.font))) {
+        !pt_bitmap_open(&bitmap, a->bitmap_width, pt_font_height(a->draft.font))) {
         notice("There is not enough memory for this font size.");
         return false;
     }
-    if (a->shell && pt_call(&a->arm, PT_APPEARANCE, &a->draft, 0, a->typing) != PT_OK) {
+    RectangleType bounds = display_bounds();
+    PtGrid grid = pt_grid(&a->draft, 2 * bounds.extent.x, shell_height(a, &bounds));
+    if (a->shell && pt_call(&a->arm, PT_APPEARANCE, &a->draft, grid.rows, grid.cols) != PT_OK) {
         pt_bitmap_close(&bitmap);
         notice("Could not apply the settings to this session.");
         return false;
@@ -638,7 +727,7 @@ static Boolean apply_settings(App *a)
         a->terminal = bitmap;
     }
     a->appearance = a->draft;
-    a->rows = pt_rows(&a->appearance, a->typing);
+    a->grid = grid;
     a->cursor_on = true;
     cursor_reset(a);
     if (!pt_settings_save(&a->appearance))
@@ -673,16 +762,63 @@ static void shell_draw(App *a, Boolean all)
     UInt32 dirty[2] = {pt_le32(frame.rows), pt_le32(frame.rows + 4)};
     if (!(dirty[0] || dirty[1] || all)) return;
     UInt16 coords = WinSetCoordinateSystem(kCoordinatesNative);
-    if (all)
-        pt_paint_rgb(0, 0, PT_VIEW_WIDTH, a->typing ? PT_TYPE_HEIGHT : PT_VIEW_HEIGHT,
-                     a->appearance.background);
+    if (all) pt_paint_rgb(0, 0, a->view_width, a->view_height, a->appearance.background);
     const UInt16 height = pt_font_height(a->appearance.font);
-    for (UInt16 row = 0; row < a->rows; row++) {
+    for (UInt16 row = 0; row < a->grid.rows; row++) {
+        UInt32 raster = ((UInt32)a->view_width << 16) | row;
         if ((all || (dirty[row / 32] & (1UL << (row % 32)))) &&
-            pt_call(&a->arm, PT_RASTER_ROW, a->terminal.bits, a->terminal.stride, row) == PT_OK)
+            pt_call(&a->arm, PT_RASTER_ROW, a->terminal.bits, a->terminal.stride, raster) == PT_OK)
             WinDrawBitmap((BitmapType *)a->terminal.display, 0, row * height);
     }
     WinSetCoordinateSystem(coords);
+}
+
+static Int32 shell_layout(App *a, FormType *form, const RectangleType *bounds)
+{
+    UInt16 width = 2 * bounds->extent.x, height = shell_height(a, bounds);
+    PtGrid grid = pt_grid(&a->appearance, width, height);
+    if (width > a->bitmap_width || !pt_grid_valid(grid.rows, grid.cols)) return PT_ERROR;
+    if (grid.rows != a->grid.rows || grid.cols != a->grid.cols) {
+        Int32 result = pt_call(&a->arm, PT_RESIZE, NULL, grid.rows, grid.cols);
+        if (result != PT_OK) return result;
+    }
+    a->grid = grid;
+    a->view_width = width;
+    a->view_height = height;
+
+    const Boolean controls = !a->fullscreen;
+    const Boolean typing = controls && a->typing;
+    Coord toolbar = bounds->extent.y - SHELL_TOOLBAR + 1;
+    static const UInt16 buttons[] = {End, ShellFull, ShellSettings, Type,
+                                    Ctrl, Esc, Tab, ScrollUp, ScrollDown};
+    Coord right = bounds->extent.x - 1;
+    for (UInt16 i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        UInt16 index = object_index(buttons[i]);
+        RectangleType button;
+        FrmGetObjectBounds(form, index, &button);
+        Coord x = button.topLeft.x;
+        if (i < 4) {
+            x = right - button.extent.x;
+            right = x - 1;
+        }
+        FrmSetObjectPosition(form, index, x, toolbar);
+        show(buttons[i], controls);
+    }
+
+    UInt16 index = object_index(ShellText);
+    RectangleType field;
+    FrmGetObjectBounds(form, index, &field);
+    Boolean width_changed = field.extent.x != bounds->extent.x - 45;
+    field.extent.x = bounds->extent.x - 45;
+    field.topLeft.y = toolbar - SHELL_LINE;
+    FrmSetObjectBounds(form, index, &field);
+    if (width_changed) FldRecalculateField(object(ShellText), false);
+    FrmSetObjectPosition(form, object_index(Send), bounds->extent.x - 41, field.topLeft.y);
+    if (!typing && FrmGetFocus(form) == index) FrmSetFocus(form, frmInvalidObjectId);
+    show(ShellText, typing);
+    show(Send, typing);
+    if (typing && FrmGetFocus(form) != index) focus(ShellText);
+    return PT_OK;
 }
 
 static void term_send(App *a, UInt32 key)
@@ -700,7 +836,8 @@ static Boolean shell_key(App *a, const EventType *e)
 {
     WChar c = e->data.keyDown.chr;
     Boolean v = (e->data.keyDown.modifiers & commandKeyMask) != 0;
-    if (a->typing && (!v || c == vchrRockerLeft || c == vchrRockerRight)) return false;
+    if (a->typing && !a->fullscreen && (!v || c == vchrRockerLeft || c == vchrRockerRight))
+        return false;
     UInt32 key = 0;
     if (v) {
         switch (c) {
@@ -744,24 +881,18 @@ static void shell_controls(App *a, UInt16 action)
     case ShellSettings:
         open_settings(a);
         break;
+    case ShellFull:
+        enter_fullscreen(a);
+        draw_form(a, ShellForm, false);
+        break;
     case Type:
         a->typing = !a->typing;
-        a->rows = pt_rows(&a->appearance, a->typing);
+        set_field(ShellText, "");
+        draw_form(a, ShellForm, false);
         if (a->typing) {
-            set_field(ShellText, "");
-            repaint(0, 130, 160, 16);
-        } else {
-            get_field(ShellText, a->value, sizeof(a->value));
-            pt_wipe(a->value, sizeof(a->value));
-        }
-        show(ShellText, a->typing);
-        show(Send, a->typing);
-        pt_call(&a->arm, PT_RESIZE, NULL, a->rows, pt_cols(&a->appearance));
-        if (a->typing) {
-            focus(ShellText);
             SysKeyboardDialog(kbdAlpha);
+            draw_form(a, ShellForm, false);
         }
-        shell_draw(a, true);
         break;
     case Send: {
         Char line[256];
@@ -806,6 +937,8 @@ static void pump(App *a)
             FrmGotoForm(HomeForm);
             return;
         }
+        RectangleType bounds = display_bounds();
+        a->login.grid = pt_grid(&a->appearance, 2 * bounds.extent.x, shell_height(a, &bounds));
         Int32 rc = pt_call(&a->arm, PT_CONNECT, &a->login, 0, 0);
         pt_wipe(a->login.password, sizeof(a->login.password));
         if (rc != PT_OK) {
@@ -814,6 +947,7 @@ static void pump(App *a)
             FrmGotoForm(HomeForm);
             return;
         }
+        a->grid = a->login.grid;
         a->ssh_started = true;
     }
 
@@ -838,9 +972,11 @@ static void pump(App *a)
     } else if (result < 0 || result == PT_CLOSED || (result == PT_IDLE && network == PT_NET_END)) {
         Int32 reason = network == PT_NET_FAIL ? a->net.error : (Int32)pt_le32(a->detail);
         stop(a);
-        if (result < 0) code_notice("SSH connection ended", reason ? reason : result);
-        else notice("The SSH connection closed.");
+        a->ssh_end_reason = result < 0 ? (reason ? reason : result) : 0;
         FrmGotoForm(HomeForm);
+        /* Let Palm OS restore the display and draw Home before opening a dialog. */
+        EventType event = {.eType = SSH_ENDED_EVENT};
+        EvtAddEventToQueue(&event);
     } else if (a->shell) {
         if (active == ShellForm) cursor_blink(a);
         if (active == ShellForm || (a->appearance.flags & PT_AUDIBLE_BELL))
@@ -851,21 +987,38 @@ static void pump(App *a)
 static void draw_form(App *a, UInt16 id, Boolean opening)
 {
     FormType *form = FrmGetActiveForm();
+    RectangleType bounds = display_bounds();
+    if (a->dia || a->can_rotate) {
+        WinHandle window = FrmGetWindowHandle(form);
+        RectangleType current_bounds;
+        WinGetBounds(window, &current_bounds);
+        if (MemCmp(&current_bounds, &bounds, sizeof(bounds))) WinSetBounds(window, &bounds);
+    }
+    a->drawn_bounds = bounds;
+    if (a->can_rotate) a->drawn_orientation = SysGetOrientation();
+    if (id == ShellForm) {
+        if (opening && a->typing) {
+            set_field(ShellText, a->line_draft);
+            pt_wipe(a->line_draft, sizeof(a->line_draft));
+        }
+        if (opening && a->ctrl) CtlSetLabel(object(Ctrl), "Ctrl*");
+        Int32 result = shell_layout(a, form, &bounds);
+        if (result != PT_OK) {
+            stop(a);
+            code_notice("Could not resize the SSH terminal", result);
+            FrmGotoForm(HomeForm);
+            return;
+        }
+        WinEraseWindow();
+        FrmDrawForm(form);
+        shell_draw(a, true);
+        return;
+    }
     if (id == SettingsForm) {
         if (opening)
             pt_bitmap_open(&a->preview, PT_PREVIEW_WIDTH, PT_PREVIEW_HEIGHT);
         pt_settings_draw(&a->arm, &a->draft, &a->preview);
         return;
-    }
-    if (opening && id == ShellForm) {
-        if (a->typing) {
-            set_field(ShellText, a->line_draft);
-            pt_wipe(a->line_draft, sizeof(a->line_draft));
-            show(ShellText, true);
-            show(Send, true);
-            focus(ShellText);
-        }
-        if (a->ctrl) CtlSetLabel(object(Ctrl), "Ctrl*");
     }
     if (opening && id == HomeForm) {
         set_field(Host, a->profile.host);
@@ -929,8 +1082,6 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
             text(8, 41, a->profile.host);
             text(8, 56, a->login.pinned ? "Opening an SSH shell..." : "Reading the server host key...");
         }
-    } else if (id == ShellForm) {
-        shell_draw(a, true);
     }
 }
 
@@ -939,8 +1090,30 @@ static Boolean on_form(EventType *event)
     App *a = current();
     if (!a) return false;
     UInt16 id = form_id();
+    if (event->eType == winEnterEvent) {
+        if ((a->dia || a->can_rotate) &&
+            event->data.winEnter.enterWindow == FrmGetWindowHandle(FrmGetActiveForm())) {
+            if (a->dia && !a->fullscreen) PINSetInputTriggerState(pinInputTriggerEnabled);
+            if (a->can_rotate) SysSetOrientationTriggerState(sysOrientationTriggerEnabled);
+            post_display_change();
+        }
+        return false;
+    }
+    if (event->eType == winDisplayChangedEvent) {
+        if (WinGetActiveWindow() != FrmGetWindowHandle(FrmGetActiveForm())) return false;
+        RectangleType bounds = display_bounds();
+        if (MemCmp(&a->drawn_bounds, &bounds, sizeof(bounds)) ||
+            (a->can_rotate && a->drawn_orientation != SysGetOrientation()))
+            draw_form(a, id, false);
+        return true;
+    }
     if (event->eType == frmOpenEvent || event->eType == frmUpdateEvent) {
         draw_form(a, id, event->eType == frmOpenEvent);
+        return true;
+    }
+    if (id == ShellForm && a->fullscreen && event->eType == penDownEvent) {
+        leave_fullscreen(a);
+        draw_form(a, ShellForm, false);
         return true;
     }
     if (id == SettingsForm) return settings_event(a, event);
@@ -1033,25 +1206,31 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
 #endif
     a->net.socket = -1;
     pt_settings_load(&a->appearance);
-    a->rows = pt_rows(&a->appearance, 0);
+    display_features(a);
+    Boolean large_display = a->dia || a->can_rotate;
+    a->bitmap_width = large_display ? PT_DISPLAY_LONG : PT_DISPLAY_SHORT;
     a->cursor_interval = SysTicksPerSecond() / 2;
     StrCopy(a->profile.port, "22");
 
     Err result = errNone;
-    pt_bitmap_open(&a->terminal, PT_VIEW_WIDTH, pt_font_height(a->appearance.font));
+    pt_bitmap_open(&a->terminal, a->bitmap_width, pt_font_height(a->appearance.font));
     a->db = pt_store_open();
-    Boolean registered = false, feature = false;
+    Boolean sleep_registered = false, display_registered = false, feature = false;
     UInt16 card = 0;
     LocalID db = 0;
-    if (!a->db || !a->terminal.display || !pt_arm_open(&a->arm) ||
+    if (!a->db || !a->terminal.display || !pt_arm_open(&a->arm, large_display) ||
         FtrSet(PT_CREATOR, APP_FEATURE, (UInt32)a)) {
         notice("Palm Terminal could not initialize its native engine or database.");
         result = memErrNotEnoughSpace;
     } else {
         feature = true;
-        registered = !SysCurAppDatabase(&card, &db) &&
-                     !SysNotifyRegister(card, db, sysNotifySleepRequestEvent,
-                                        on_sleep, sysNotifyNormalPriority, a);
+        if (!SysCurAppDatabase(&card, &db)) {
+            sleep_registered = !SysNotifyRegister(card, db, sysNotifySleepRequestEvent,
+                                                  on_sleep, sysNotifyNormalPriority, a);
+            if (large_display)
+                display_registered = !SysNotifyRegister(card, db, sysNotifyDisplayResizedEvent,
+                                                         on_display_change, sysNotifyNormalPriority, a);
+        }
         FrmGotoForm(HomeForm);
         do {
             EventType event;
@@ -1071,10 +1250,16 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
                 }
                 continue;
             }
+            if (event.eType == SSH_ENDED_EVENT) {
+                if (a->ssh_end_reason) code_notice("SSH connection ended", a->ssh_end_reason);
+                else notice("The SSH connection closed.");
+                continue;
+            }
             if (!SysHandleEvent(&event) && !MenuHandleEvent(NULL, &event, &menu_error)) {
                 if (event.eType == frmLoadEvent) {
                     FormType *form = FrmInitForm(event.data.frmLoad.formID);
                     if (!form) break;
+                    configure_form(a, form);
                     FrmSetActiveForm(form);
                     FrmSetEventHandler(form, on_form);
                 } else {
@@ -1085,7 +1270,10 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
         } while (true);
     }
     a->stopped = true;
-    if (registered) SysNotifyUnregister(card, db, sysNotifySleepRequestEvent, sysNotifyNormalPriority);
+    if (display_registered)
+        SysNotifyUnregister(card, db, sysNotifyDisplayResizedEvent, sysNotifyNormalPriority);
+    if (sleep_registered)
+        SysNotifyUnregister(card, db, sysNotifySleepRequestEvent, sysNotifyNormalPriority);
     stop(a);
     if (feature) {
         FrmCloseAllForms();

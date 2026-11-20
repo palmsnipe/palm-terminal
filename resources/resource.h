@@ -40,6 +40,7 @@
 #define ShellText 1608
 #define Send 1609
 #define ShellSettings 1610
+#define ShellFull 1611
 #define BusyForm 1700
 #define InfoAlert 1800
 #define ConfirmAlert 1801

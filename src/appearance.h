@@ -2,13 +2,13 @@
 #define PALM_TERMINAL_APPEARANCE_H
 #include <stdint.h>
 
-#define PT_VIEW_WIDTH 320
-#define PT_VIEW_HEIGHT 290
-#define PT_TYPE_HEIGHT 260
+#define PT_DISPLAY_LONG 480
+#define PT_DISPLAY_SHORT 320
 #define PT_PREVIEW_WIDTH 288
 #define PT_PREVIEW_HEIGHT 13
-#define PT_GRID_COLS 64
-#define PT_GRID_ROWS 36
+#define PT_GRID_COLS 96
+#define PT_GRID_ROWS 60
+#define PT_GRID_CELLS 3840
 
 enum { PT_FONT_NORMAL, PT_FONT_SMALL, PT_FONT_LARGE, PT_FONT_COUNT };
 enum { PT_CURSOR_BLOCK, PT_CURSOR_UNDERLINE, PT_CURSOR_BAR, PT_CURSOR_HIDDEN, PT_CURSOR_COUNT };
@@ -50,14 +50,19 @@ static inline unsigned pt_font_height(unsigned font)
     return font == PT_FONT_SMALL ? 8 : font == PT_FONT_LARGE ? 13 : 10;
 }
 
-static inline unsigned pt_cols(const PtAppearance *a)
+typedef struct {
+    uint8_t rows, cols;
+} PtGrid;
+
+static inline PtGrid pt_grid(const PtAppearance *a, unsigned width, unsigned height)
 {
-    return PT_VIEW_WIDTH / pt_font_width(a->font);
+    return (PtGrid){height / pt_font_height(a->font), width / pt_font_width(a->font)};
 }
 
-static inline unsigned pt_rows(const PtAppearance *a, int typing)
+static inline int pt_grid_valid(unsigned rows, unsigned cols)
 {
-    return (typing ? PT_TYPE_HEIGHT : PT_VIEW_HEIGHT) / pt_font_height(a->font);
+    return rows && rows <= PT_GRID_ROWS && cols && cols <= PT_GRID_COLS &&
+           rows * cols <= PT_GRID_CELLS;
 }
 
 static inline unsigned pt_history_limit(unsigned option)

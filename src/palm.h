@@ -15,6 +15,7 @@ typedef struct {
     void *image;
     void *stack;
     void *arena;
+    UInt32 arena_size;
     NativeFuncType *entry;
 } PtArm;
 
@@ -46,7 +47,7 @@ typedef struct {
 enum { PT_NET_WORK, PT_NET_READY, PT_NET_END, PT_NET_FAIL };
 enum { PT_RECORD_PROFILE = 1, PT_RECORD_PIN, PT_RECORD_KEY };
 
-Boolean pt_arm_open(PtArm *arm);
+Boolean pt_arm_open(PtArm *arm, Boolean large_display);
 void pt_arm_close(PtArm *arm);
 Int32 pt_call(const PtArm *arm, UInt32 command, void *buffer, UInt32 size, UInt32 value);
 void pt_wipe(void *p, size_t size);

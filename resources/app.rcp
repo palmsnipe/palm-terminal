@@ -67,14 +67,15 @@ FORM ID ShellForm AT (0 0 160 160)
 BEGIN
     FIELD ID ShellText AT (1 131 115 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 255 NONUSABLE
     BUTTON "Send" ID Send AT (119 131 39 14) NONUSABLE
-    BUTTON "Ctrl" ID Ctrl AT (1 146 23 13)
-    BUTTON "Esc" ID Esc AT (25 146 19 13)
-    BUTTON "Tab" ID Tab AT (45 146 19 13)
-    BUTTON "^" ID ScrollUp AT (65 146 12 13)
-    BUTTON "v" ID ScrollDown AT (78 146 12 13)
-    BUTTON "Type" ID Type AT (91 146 22 13)
-    BUTTON "Prefs" ID ShellSettings AT (114 146 23 13)
-    BUTTON "End" ID End AT (138 146 21 13)
+    BUTTON "Ctrl" ID Ctrl AT (1 146 21 13)
+    BUTTON "Esc" ID Esc AT (23 146 17 13)
+    BUTTON "Tab" ID Tab AT (41 146 17 13)
+    BUTTON "^" ID ScrollUp AT (59 146 10 13)
+    BUTTON "v" ID ScrollDown AT (70 146 10 13)
+    BUTTON "Type" ID Type AT (81 146 21 13)
+    BUTTON "Prefs" ID ShellSettings AT (103 146 23 13)
+    BUTTON "Full" ID ShellFull AT (127 146 16 13)
+    BUTTON "End" ID End AT (144 146 15 13)
 END
 
 FORM ID SettingsForm AT (0 0 160 160)

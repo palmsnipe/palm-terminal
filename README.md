@@ -1,10 +1,10 @@
 # Palm Terminal
 
-Palm Terminal is an interactive SSH client for the Tungsten E2 and Palm OS 5. It supports a single shell over a configured Palm NetLib connection, saved connection profiles, password and Ed25519 authentication, and host-key verification.
+Palm Terminal is an interactive SSH client for the Tungsten E2 and Palm TX. It supports a single shell over a configured Palm NetLib connection, saved connection profiles, password and Ed25519 authentication, and host-key verification.
 
 ## Screenshots
 
-Captured on a Tungsten E2 in CloudpilotEmu using a local OpenSSH test server.
+Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH test server.
 
 | Connection profile | SSH key manager |
 | --- | --- |
@@ -38,6 +38,16 @@ Open **Settings** on the home screen or **Prefs** in an open shell. The preview 
 
 ![Terminal settings with a dark blue preview and custom scrollback](docs/screenshots/settings.png)
 
+## Fullscreen and Palm TX
+
+- Tap **Full** in a shell to hide the terminal controls and use the whole display. Tap the terminal to restore the controls. A line you were editing with **Type** returns with them.
+- On the TX, use the status bar to open or close the Dynamic Input Area (DIA) or switch between portrait and landscape. Palm Terminal resizes the live SSH session as the available space changes.
+- Fullscreen also hides the TX input area and status bar. Tap the terminal to restore the previous input-area state and use the system rotation control again.
+
+| Palm TX with the input area open | Palm TX in landscape fullscreen |
+| --- | --- |
+| ![Portrait shell above the Palm TX input area](docs/screenshots/tx-input-area.png) | ![Landscape fullscreen shell reporting 40 rows and 96 columns](docs/screenshots/tx-landscape-full.png) |
+
 ## Build and test
 
 Install [Palm Toolchain](https://github.com/palmsnipe/palm-toolchain) with a user-supplied Palm OS 5 SDK. The default expects the toolchain checkout next to this project. Clang, Python 3, Node.js, and OpenSSH's `ssh-keygen` are used by the build or tests.
@@ -54,7 +64,7 @@ build/host-test shell 14229 palmtest - terminal-test
 build/host-test shell 14229 palmtest /path/to/test_id_ed25519 import-pass
 ```
 
-See [Tungsten E2 verification](tests/E2.md) for the emulator setup, results, and measurements.
+See [Tungsten E2 verification](tests/E2.md) for the emulator setup and performance measurements and [Palm TX verification](tests/TX.md) for display and rotation results.
 
 ## Compatibility
 

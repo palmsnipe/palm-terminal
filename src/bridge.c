@@ -2,6 +2,7 @@
 
 #define ARM_STACK_BYTES (40UL * 1024)
 #define ARM_ARENA_BYTES (448UL * 1024)
+#define ARM_LARGE_DISPLAY_ARENA_BYTES (768UL * 1024)
 
 extern SysAppInfoPtr SysGetAppInfo(SysAppInfoPtr *, SysAppInfoPtr *)
     SYS_TRAP(sysTrapSysGetAppInfo);
@@ -77,7 +78,7 @@ static Boolean load_image(PtArm *arm, const uint8_t *meta, UInt32 meta_length)
     return true;
 }
 
-Boolean pt_arm_open(PtArm *arm)
+Boolean pt_arm_open(PtArm *arm, Boolean large_display)
 {
     MemHandle h = DmGetResource('armc', 0);
     if (!h) return false;
@@ -87,10 +88,11 @@ Boolean pt_arm_open(PtArm *arm)
     DmReleaseResource(h);
     if (ok) {
         arm->stack = raw_allocate(ARM_STACK_BYTES + 7);
-        arm->arena = raw_allocate(ARM_ARENA_BYTES + 7);
+        arm->arena_size = large_display ? ARM_LARGE_DISPLAY_ARENA_BYTES : ARM_ARENA_BYTES;
+        arm->arena = raw_allocate(arm->arena_size + 7);
         ok = arm->stack && arm->arena;
     }
-    if (ok) ok = pt_call(arm, PT_BOOT, align8(arm->arena), ARM_ARENA_BYTES, 0) == PT_OK;
+    if (ok) ok = pt_call(arm, PT_BOOT, align8(arm->arena), arm->arena_size, 0) == PT_OK;
     if (!ok) pt_arm_close(arm);
     return ok;
 }
@@ -103,7 +105,7 @@ void pt_arm_close(PtArm *arm)
         MemPtrFree(arm->stack);
     }
     if (arm->arena) {
-        pt_wipe(arm->arena, ARM_ARENA_BYTES + 7);
+        pt_wipe(arm->arena, arm->arena_size + 7);
         MemPtrFree(arm->arena);
     }
     MemSet(arm, sizeof(*arm), 0);

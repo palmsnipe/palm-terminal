@@ -11,9 +11,13 @@
 #endif
 
 #define NET_BUFFER (2 * PT_IO_CHUNK)
-#define HISTORY_ROW_BYTES (PT_GRID_COLS * PT_CELL_BYTES)
 #define HISTORY_MAX_ROWS 192
 #define AUTH_KEY_TYPE "ssh-ed25519"
+
+typedef struct {
+    unsigned cols, capacity;
+    uint8_t cells[];
+} HistoryRow;
 
 typedef struct {
     uint32_t count;
@@ -34,7 +38,7 @@ typedef struct {
     uint8_t fingerprint[32];
     PtAppearance appearance;
     uint32_t dirty[2];
-    uint8_t *history[HISTORY_MAX_ROWS];
+    HistoryRow *history[HISTORY_MAX_ROWS];
     unsigned history_limit, history_next, history_count, history_offset;
     unsigned cols, rows;
     VTermPos cursor;
@@ -222,10 +226,10 @@ static void empty_cell(uint8_t *out)
     memset(out + 4, 0, 4);
 }
 
-static uint8_t *take_oldest_history(Backend *s)
+static HistoryRow *take_oldest_history(Backend *s)
 {
     unsigned slot = (s->history_next + HISTORY_MAX_ROWS - s->history_count) % HISTORY_MAX_ROWS;
-    uint8_t *row = s->history[slot];
+    HistoryRow *row = s->history[slot];
     s->history[slot] = NULL;
     s->history_count--;
     return row;
@@ -244,16 +248,28 @@ static int push_history(int cols, const VTermScreenCell *cells, void *user)
 {
     Backend *s = user;
     if (!s->history_limit) return 1;
-    uint8_t *row = s->history_count < s->history_limit ? malloc(HISTORY_ROW_BYTES) : NULL;
-    if (!row && s->history_count) row = take_oldest_history(s);
+    unsigned width = (unsigned)cols;
+    size_t bytes = sizeof(HistoryRow) + width * PT_CELL_BYTES;
+    HistoryRow *row = s->history_count < s->history_limit ? malloc(bytes) : NULL;
+    if (row) {
+        row->capacity = width;
+    } else if (s->history_count) {
+        row = take_oldest_history(s);
+        if (row->capacity < width) {
+            HistoryRow *wider = realloc(row, bytes);
+            if (wider) {
+                row = wider;
+                row->capacity = width;
+            }
+        }
+    }
     if (!row) return 1;
     s->history[s->history_next] = row;
     s->history_next = (s->history_next + 1) % HISTORY_MAX_ROWS;
     s->history_count++;
-    for (int col = 0; col < PT_GRID_COLS; col++, row += PT_CELL_BYTES) {
-        if (col < cols) encode_cell(s, &cells[col], row);
-        else empty_cell(row);
-    }
+    row->cols = width < row->capacity ? width : row->capacity;
+    for (unsigned col = 0; col < row->cols; col++)
+        encode_cell(s, &cells[col], row->cells + col * PT_CELL_BYTES);
     if (s->history_offset && s->history_offset < s->history_count) s->history_offset++;
     else if (s->history_offset) damage_all(s);
     return 1;
@@ -340,7 +356,7 @@ static int terminal_open(Backend *s)
 
 static int resize_terminal(Backend *s, unsigned rows, unsigned cols)
 {
-    if (!s->vterm || !rows || rows > PT_GRID_ROWS || !cols || cols > PT_GRID_COLS)
+    if (!s->vterm || !pt_grid_valid(rows, cols))
         return PT_ERROR;
     if (rows != s->rows || cols != s->cols) {
         s->rows = rows;
@@ -353,16 +369,17 @@ static int resize_terminal(Backend *s, unsigned rows, unsigned cols)
     return PT_OK;
 }
 
-static int set_appearance(Backend *s, const PtAppearance *appearance, int typing)
+static int set_appearance(Backend *s, const PtAppearance *appearance, unsigned rows, unsigned cols)
 {
-    if (!s->screen || !pt_appearance_valid(appearance)) return PT_ERROR;
+    if (!s->screen || !pt_appearance_valid(appearance) || !pt_grid_valid(rows, cols))
+        return PT_ERROR;
     s->history_limit = pt_history_limit(appearance->history);
     trim_history(s, s->history_limit);
     s->appearance = *appearance;
     terminal_colors(s);
     s->cursor_phase = 1;
     if (!(s->appearance.flags & PT_AUDIBLE_BELL)) s->bell_pending = 0;
-    return resize_terminal(s, pt_rows(appearance, typing), pt_cols(appearance));
+    return resize_terminal(s, rows, cols);
 }
 
 static int get_row(Backend *s, unsigned row, uint8_t *out)
@@ -371,7 +388,10 @@ static int get_row(Backend *s, unsigned row, uint8_t *out)
     if (row < s->history_offset) {
         unsigned slot = (s->history_next + HISTORY_MAX_ROWS - s->history_offset + row) %
                         HISTORY_MAX_ROWS;
-        memcpy(out, s->history[slot], s->cols * PT_CELL_BYTES);
+        const HistoryRow *saved = s->history[slot];
+        unsigned count = saved->cols < s->cols ? saved->cols : s->cols;
+        memcpy(out, saved->cells, count * PT_CELL_BYTES);
+        for (unsigned col = count; col < s->cols; col++) empty_cell(out + col * PT_CELL_BYTES);
         return PT_OK;
     }
     row -= s->history_offset;
@@ -464,15 +484,17 @@ static int bitmap_valid(const void *bitmap, uint32_t stride, unsigned width)
     return bitmap && stride >= width * 2 && !(((uintptr_t)bitmap | stride) & 1u);
 }
 
-static int raster_row(Backend *s, unsigned row, void *bitmap, uint32_t stride)
+static int raster_row(Backend *s, unsigned row, unsigned pixels_wide, void *bitmap, uint32_t stride)
 {
-    if (!bitmap_valid(bitmap, stride, PT_VIEW_WIDTH)) return PT_ERROR;
+    const PtAppearance *a = &s->appearance;
+    const unsigned width = pt_font_width(a->font), height = pt_font_height(a->font);
+    unsigned used = s->cols * width;
+    if (pixels_wide < used || pixels_wide > PT_DISPLAY_LONG ||
+        !bitmap_valid(bitmap, stride, pixels_wide)) return PT_ERROR;
     uint8_t cells[PT_GRID_COLS * PT_CELL_BYTES];
     int rc = get_row(s, row, cells);
     if (rc != PT_OK) return rc;
 
-    const PtAppearance *a = &s->appearance;
-    const unsigned width = pt_font_width(a->font), height = pt_font_height(a->font);
     const unsigned pitch = stride / 2;
     uint16_t *pixels = bitmap;
     const uint16_t text = rgb(a->text), background = rgb(a->background);
@@ -495,7 +517,7 @@ static int raster_row(Backend *s, unsigned row, void *bitmap, uint32_t stride)
         else paint_glyph(pixels + col * width, pitch, a->font, glyph, fg, bg);
     }
     for (unsigned y = 0; y < height; y++)
-        for (unsigned x = s->cols * width; x < PT_VIEW_WIDTH; x++)
+        for (unsigned x = used; x < pixels_wide; x++)
             pixels[y * pitch + x] = swap565(background);
     return PT_OK;
 }
@@ -557,11 +579,12 @@ void pt_reset_after_fault(void)
 
 static int connect_start(Backend *s, const PtLogin *login)
 {
-    if (s->ssh || !login->user[0] || !pt_appearance_valid(&login->appearance)) return PT_ERROR;
+    if (s->ssh || !login->user[0] || !pt_appearance_valid(&login->appearance) ||
+        !pt_grid_valid(login->grid.rows, login->grid.cols)) return PT_ERROR;
     s->login = *login;
     s->appearance = login->appearance;
-    s->cols = pt_cols(&s->appearance);
-    s->rows = pt_rows(&s->appearance, 0);
+    s->cols = login->grid.cols;
+    s->rows = login->grid.rows;
     if (login->key_auth && login->pinned) {
         if (!s->identity_loaded) return PT_BAD_KEY;
         int length = pt_key_der(&s->identity, s->der, sizeof(s->der));
@@ -768,7 +791,7 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
     case PT_RESIZE:
         return resize_terminal(s, size, value);
     case PT_APPEARANCE:
-        return set_appearance(s, buffer, value != 0);
+        return set_appearance(s, buffer, size, value);
     case PT_CURSOR_PHASE:
         if (s->cursor_phase != (value != 0)) {
             s->cursor_phase = value != 0;
@@ -792,7 +815,7 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
         return get_row(s, value, buffer);
 #ifdef PT_ARMLET
     case PT_RASTER_ROW:
-        return raster_row(s, value, buffer, size);
+        return raster_row(s, value & 0xffff, value >> 16, buffer, size);
     case PT_RASTER_PREVIEW:
         return raster_preview(buffer, size);
 #endif
