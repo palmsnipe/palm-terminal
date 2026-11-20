@@ -1,0 +1,96 @@
+#include "resource.h"
+#include "arm-resources.rcp"
+
+DATA "code" ID 1 "code0001.bin"
+
+FORM ID HomeForm AT (0 0 160 160)
+BEGIN
+    TITLE "Palm Terminal"
+    LABEL "Host" AUTOID AT (8 22) FONT 0
+    FIELD ID Host AT (8 34 108 13) EDITABLE SINGLELINE UNDERLINED MAXCHARS 95
+    LABEL "Port" AUTOID AT (124 22) FONT 0
+    FIELD ID Port AT (124 34 29 13) EDITABLE SINGLELINE UNDERLINED NUMERIC MAXCHARS 5
+    LABEL "Username" AUTOID AT (8 56) FONT 0
+    FIELD ID User AT (8 68 144 13) EDITABLE SINGLELINE UNDERLINED MAXCHARS 63
+    BUTTON "Connect" ID Connect AT (8 104 68 15)
+    BUTTON "Profiles" ID Profiles AT (84 104 68 15)
+    BUTTON "Keys" ID Keys AT (8 123 68 15)
+    BUTTON "Seed setup" ID Seed AT (84 123 68 15)
+    BUTTON "Forget host key" ID ForgetHost AT (8 142 144 14)
+END
+
+FORM ID ListForm AT (0 0 160 160)
+BEGIN
+    TITLE "Palm Terminal"
+    LIST "" ID Items AT (7 21 146 54) VISIBLEITEMS 5 FONT 0
+    BUTTON "<" ID Prev AT (7 77 22 14)
+    BUTTON ">" ID Next AT (33 77 22 14)
+    BUTTON "Use" ID Pick AT (59 77 42 14)
+    BUTTON "Delete" ID Remove AT (105 77 48 14)
+    BUTTON "Import" ID Import AT (7 95 70 14)
+    BUTTON "Generate" ID Generate AT (83 95 70 14)
+    BUTTON "Export .pub" ID Public AT (7 113 70 14)
+    BUTTON "Use password" ID UsePassword AT (83 113 70 14)
+    BUTTON "Back" ID Back AT (7 140 60 14)
+END
+
+FORM ID TextForm AT (0 0 160 160)
+BEGIN
+    TITLE "Palm Terminal"
+    FIELD ID Value AT (7 65 146 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 127
+    BUTTON "OK" ID Accept AT (8 118 65 15)
+    BUTTON "Cancel" ID Cancel AT (85 118 65 15)
+END
+
+FORM ID SecretForm AT (0 0 160 160)
+BEGIN
+    TITLE "Palm Terminal"
+    BUTTON "OK" ID Accept AT (8 118 65 15)
+    BUTTON "Cancel" ID Cancel AT (85 118 65 15)
+END
+
+FORM ID TrustForm AT (0 0 160 160)
+BEGIN
+    TITLE "Verify host key"
+    BUTTON "Trust" ID Accept AT (8 117 65 15)
+    BUTTON "Cancel" ID Cancel AT (85 117 65 15)
+END
+
+FORM ID BusyForm AT (0 0 160 160)
+BEGIN
+    TITLE "Palm Terminal"
+    BUTTON "Cancel" ID Cancel AT (48 123 63 15)
+END
+
+FORM ID ShellForm AT (0 0 160 160)
+BEGIN
+    FIELD ID ShellText AT (1 131 115 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 255 NONUSABLE
+    BUTTON "Send" ID Send AT (119 131 39 14) NONUSABLE
+    BUTTON "Ctrl" ID Ctrl AT (1 146 24 13)
+    BUTTON "Esc" ID Esc AT (26 146 23 13)
+    BUTTON "Tab" ID Tab AT (50 146 23 13)
+    BUTTON "^" ID ScrollUp AT (74 146 14 13)
+    BUTTON "v" ID ScrollDown AT (89 146 14 13)
+    BUTTON "Type" ID Type AT (104 146 27 13)
+    BUTTON "End" ID End AT (132 146 26 13)
+END
+
+ALERT ID InfoAlert
+INFORMATION
+BEGIN
+    TITLE "Palm Terminal"
+    MESSAGE "^1"
+    BUTTONS "OK"
+END
+
+ALERT ID ConfirmAlert
+CONFIRMATION
+BEGIN
+    TITLE "Palm Terminal"
+    MESSAGE "^1"
+    BUTTONS "Continue" "Cancel"
+END
+
+APPLICATIONICONNAME ID AppName "Palm Terminal"
+VERSION ID AppVersion "0.1.0"
+STRING ID AppVersion "0.1.0"

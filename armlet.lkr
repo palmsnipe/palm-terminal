@@ -1,0 +1,16 @@
+SECTIONS
+{
+    . = 0;
+    .image : {
+        KEEP(*(.text.arm_entry))
+        *(.text .text.* .rodata .rodata.*)
+        *(.data .data.*)
+        . = ALIGN(8);
+        *(.bss .bss.* COMMON)
+        . = ALIGN(4);
+        BYTE(0)
+        . = ALIGN(4);
+    }
+    /DISCARD/ : { *(.comment .note.* .ARM.exidx* .ARM.extab*) }
+}
+ENTRY(arm_entry)
