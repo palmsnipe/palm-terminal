@@ -42,7 +42,7 @@ all: $(PRC)
 $(BUILD_DIR):
 	@mkdir -p $@
 
-$(BUILD_DIR)/%.o: src/%.c resources/resource.h $(BUILD_DIR)/terminal-font.h Makefile | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: src/%.c resources/resource.h Makefile | $(BUILD_DIR)
 	@test -x "$(CC)" || { echo "Missing Palm compiler; run 'make bootstrap' from $(TOOLCHAIN_ROOT)" >&2; exit 1; }
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -86,7 +86,7 @@ WOLFSSL := $(DEP_ROOT)/wolfssl
 WOLFSSH := $(DEP_ROOT)/wolfssh
 VTERM := $(DEP_ROOT)/vterm
 OPENSSH := $(DEP_ROOT)/openssh
-WOLF_CRYPTO_SOURCES := aes asn coding curve25519 ed25519 ecc error fe_low_mem ge_low_mem hmac kdf memory random sha256 sha512 sha3 wc_mlkem wc_mlkem_poly wolfmath sp_int sp_c32 hash signature wc_port
+WOLF_CRYPTO_SOURCES := aes asn coding curve25519 ed25519 ecc error fe_operations ge_operations hmac kdf memory random sha256 sha512 sha3 wc_mlkem wc_mlkem_poly wolfmath sp_int sp_c32 hash signature wc_port
 SSH_SOURCES := ssh io port ossh
 VTERM_SOURCES := encoding keyboard mouse parser pen screen state unicode vterm
 NATIVE_SOURCES := src/backend.c src/key.c src/entropy.c $(BUILD_DIR)/ssh-internal.c \
@@ -94,11 +94,12 @@ NATIVE_SOURCES := src/backend.c src/key.c src/entropy.c $(BUILD_DIR)/ssh-interna
 	$(addsuffix .c,$(addprefix $(WOLFSSH)/src/,$(SSH_SOURCES))) \
 	$(addsuffix .c,$(addprefix $(VTERM)/src/,$(VTERM_SOURCES))) \
 	$(BUILD_DIR)/bcrypt-pbkdf.c $(OPENSSH)/openbsd-compat/blowfish.c
+ARM_SOURCES := src/arm_entry.S src/arm_runtime.c src/blowfish_arm.S $(NATIVE_SOURCES)
 NATIVE_INCLUDES := -Isrc -I$(WOLFSSL) -I$(WOLFSSH) -I$(VTERM)/include -Isrc/bcrypt -I$(OPENSSH)/openbsd-compat
 NATIVE_FLAGS := -std=gnu17 -O2 -DWOLFSSL_USER_SETTINGS -DNDEBUG $(NATIVE_INCLUDES)
 ARM_FLAGS := --target=armv4t-none-eabi -march=armv4t -marm -ffreestanding -fno-builtin \
 	-fno-pic -fno-jump-tables -ffunction-sections -fdata-sections -fno-unwind-tables \
-	-fno-stack-protector -Isrc/freestanding -isystem $(PREFIX)/m68k-none-elf/include -DPT_ARMLET $(if $(PALM_PROFILE),-DPT_PROFILE)
+	-fno-stack-protector -Isrc/freestanding -I$(BUILD_DIR) -isystem $(PREFIX)/m68k-none-elf/include -DPT_ARMLET $(if $(PALM_PROFILE),-DPT_PROFILE)
 
 $(DEP_ROOT)/.ready: tools/dependencies.py
 	python3 $< $(DEP_ROOT)
@@ -113,10 +114,10 @@ $(BUILD_DIR)/bcrypt-pbkdf.c: tools/ports.py $(DEP_ROOT)/.ready | $(BUILD_DIR)
 $(BUILD_DIR)/terminal-font.h: tools/font.py $(DEP_ROOT)/.ready | $(BUILD_DIR)
 	python3 $< $(DEP_ROOT)/font/6x10.bdf $@
 
-$(BUILD_DIR)/arm.bin: $(BUILD_DIR)/ssh-internal.c $(BUILD_DIR)/bcrypt-pbkdf.c $(wildcard src/*.h src/freestanding/*.h src/bcrypt/*.h) \
-		src/backend.c src/key.c src/entropy.c src/arm_runtime.c src/arm_entry.S armlet.lkr Makefile
+$(BUILD_DIR)/arm.bin: $(BUILD_DIR)/ssh-internal.c $(BUILD_DIR)/bcrypt-pbkdf.c $(BUILD_DIR)/terminal-font.h $(wildcard src/*.h src/freestanding/*.h src/bcrypt/*.h) \
+		src/backend.c src/key.c src/entropy.c src/arm_runtime.c src/arm_entry.S src/blowfish_arm.S armlet.lkr Makefile
 	mkdir -p $(BUILD_DIR)/arm
-	set -e; i=0; for source in src/arm_entry.S src/arm_runtime.c $(NATIVE_SOURCES); do \
+	set -e; i=0; for source in $(ARM_SOURCES); do \
 		$(ARM_CC) $(ARM_FLAGS) $(NATIVE_FLAGS) -c "$$source" -o $(BUILD_DIR)/arm/$$i.o; \
 		i=$$((i+1)); done; \
 		$(ARM_TOOLS)-ld --gc-sections --emit-relocs -Map $(BUILD_DIR)/arm/arm.map \

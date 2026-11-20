@@ -6,6 +6,9 @@
 #include <wolfssh/ssh.h>
 #include <wolfssh/error.h>
 #include <vterm.h>
+#ifdef PT_ARMLET
+#include "terminal-font.h"
+#endif
 
 #define NET_BUFFER (2 * PT_IO_CHUNK)
 #define SCROLL_LINES 96
@@ -278,6 +281,39 @@ static int get_row(Backend *s, unsigned row, uint8_t *out)
     return PT_OK;
 }
 
+#ifdef PT_ARMLET
+/* Read cells and draw into the Palm row bitmap in the same native call. */
+static int raster_row(Backend *s, unsigned row, void *bitmap, uint32_t stride)
+{
+    if (!bitmap || stride < PT_GRID_COLS * 6 * 2 || ((uintptr_t)bitmap | stride) & 1)
+        return PT_ERROR;
+    uint8_t cells[PT_GRID_COLS * PT_CELL_BYTES] = {0};
+    int rc = get_row(s, row, cells);
+    if (rc != PT_OK) return rc;
+
+    for (unsigned col = 0; col < PT_GRID_COLS; col++) {
+        const uint8_t *cell = cells + col * PT_CELL_BYTES;
+        uint32_t code = pt_le32(cell);
+        const uint8_t *glyph = latin_glyphs[0];
+        if (code >= 32 && code <= 255) glyph = latin_glyphs[code - 32];
+        else if (code >= 0x2500 && code <= 0x259f) glyph = line_glyphs[code - 0x2500];
+        else if (code) glyph = latin_glyphs['?' - 32];
+
+        /* Palm's bitmap stores big-endian RGB565. The ARM stores each
+         * halfword little-endian, so build the swapped values once. */
+        uint16_t fg = (uint16_t)(cell[5] << 8 | cell[4]);
+        uint16_t bg = (uint16_t)(cell[7] << 8 | cell[6]);
+        for (unsigned y = 0; y < 10; y++) {
+            uint16_t *pixels = (uint16_t *)((uint8_t *)bitmap + y * stride) + col * 6;
+            uint8_t bits = glyph[y];
+            for (unsigned x = 0; x < 6; x++, bits <<= 1)
+                pixels[x] = (bits & 0x80) ? fg : bg;
+        }
+    }
+    return PT_OK;
+}
+#endif
+
 static void clear_key(Backend *s)
 {
     pt_wipe(&s->identity, sizeof(s->identity));
@@ -530,6 +566,10 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
     }
     case PT_ROW:
         return get_row(s, value, buffer);
+#ifdef PT_ARMLET
+    case PT_RASTER_ROW:
+        return raster_row(s, value, buffer, size);
+#endif
     case PT_SCROLL: {
         int offset = (int)s->history_offset + (int32_t)value;
         if (offset < 0) offset = 0;

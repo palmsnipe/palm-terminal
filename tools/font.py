@@ -15,8 +15,8 @@ for block in source.read_text().split("STARTCHAR ")[1:]:
     glyphs[code] = ", ".join("0x" + row.lower() for row in bitmap)
 
 data = ["/* Generated from the public-domain X.Org misc-fixed 6x10 BDF. */",
-        "static const UInt8 latin_glyphs[224][10] = {"]
+        "static const uint8_t latin_glyphs[224][10] = {"]
 data += [f"    [{c - 32}] = {{{rows}}}," for c, rows in glyphs.items() if c < 256]
-data += ["};", "static const UInt8 line_glyphs[160][10] = {"]
+data += ["};", "static const uint8_t line_glyphs[160][10] = {"]
 data += [f"    [{c - 0x2500}] = {{{rows}}}," for c, rows in glyphs.items() if c >= 0x2500]
 output.write_text("\n".join(data + ["};", ""]))

@@ -3,7 +3,6 @@
 #include <Keyboard.h>
 #include <NotifyMgr.h>
 #include "resource.h"
-#include "terminal-font.h"
 
 #define APP_FEATURE 0
 #define PAGE_SIZE 5
@@ -23,7 +22,7 @@ typedef struct {
     PtKeyIO key_io;
     Char value[PT_PATH_MAX], secret[PT_PASSWORD_MAX], protection[PT_PASSWORD_MAX];
     Char name[PT_LABEL_MAX];
-    uint8_t detail[36], row[PT_GRID_COLS * PT_CELL_BYTES];
+    uint8_t detail[36];
     UInt32 rows_id[PAGE_SIZE];
     Char rows_text[PAGE_SIZE][42];
     Char *choices[PAGE_SIZE];
@@ -36,6 +35,8 @@ typedef struct {
 #endif
     BitmapType *row_bitmap;
     BitmapTypeV3 *row_display;
+    void *row_bits;
+    UInt16 row_stride;
 } App;
 
 static App *current(void)
@@ -594,32 +595,6 @@ static Boolean secret_key(App *a, const EventType *event)
     return true;
 }
 
-static void row_draw(App *a, UInt16 row)
-{
-    if (pt_call(&a->arm, PT_ROW, a->row, sizeof(a->row), row) != PT_OK) return;
-    UInt16 row_bytes;
-    BmpGetDimensions(a->row_bitmap, NULL, NULL, &row_bytes);
-    UInt16 stride = row_bytes / 2;
-    UInt16 *pixels = BmpGetBits(a->row_bitmap);
-    const uint8_t *cell = a->row;
-    for (UInt16 col = 0; col < PT_GRID_COLS; col++, cell += PT_CELL_BYTES) {
-        UInt32 code = pt_le32(cell);
-        const UInt8 *glyph = latin_glyphs[0];
-        if (code >= 32 && code <= 255) glyph = latin_glyphs[code - 32];
-        else if (code >= 0x2500 && code <= 0x259f) glyph = line_glyphs[code - 0x2500];
-        else if (code) glyph = latin_glyphs['?' - 32];
-        UInt16 fg = (UInt16)cell[4] << 8 | cell[5];
-        UInt16 bg = (UInt16)cell[6] << 8 | cell[7];
-        for (UInt16 y = 0; y < 10; y++) {
-            UInt16 *dest = pixels + y * stride + col * 6;
-            UInt8 bits = glyph[y];
-            for (UInt16 x = 0; x < 6; x++, bits <<= 1)
-                dest[x] = (bits & 0x80) ? fg : bg;
-        }
-    }
-    WinDrawBitmap((BitmapType *)a->row_display, 0, row * 10);
-}
-
 static void shell_draw(App *a, Boolean all)
 {
     if (!a->row_display || form_id() != ShellForm) return;
@@ -627,8 +602,11 @@ static void shell_draw(App *a, Boolean all)
     if (all) dirty = (1UL << a->rows) - 1;
     if (!dirty) return;
     UInt16 old_coords = WinSetCoordinateSystem(kCoordinatesNative);
-    for (UInt16 row = 0; row < a->rows; row++)
-        if (dirty & (1UL << row)) row_draw(a, row);
+    for (UInt16 row = 0; row < a->rows; row++) {
+        if ((dirty & (1UL << row)) &&
+            pt_call(&a->arm, PT_RASTER_ROW, a->row_bits, a->row_stride, row) == PT_OK)
+            WinDrawBitmap((BitmapType *)a->row_display, 0, row * 10);
+    }
     WinSetCoordinateSystem(old_coords);
 }
 
@@ -957,9 +935,12 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
     Err result = errNone;
     UInt16 bitmap_error = errNone;
     a->row_bitmap = BmpCreate(PT_GRID_COLS * 6, 10, 16, NULL, &bitmap_error);
-    if (a->row_bitmap)
-        a->row_display = BmpCreateBitmapV3(a->row_bitmap, kDensityDouble,
-                                         BmpGetBits(a->row_bitmap), NULL);
+    if (a->row_bitmap) {
+        a->row_bits = BmpGetBits(a->row_bitmap);
+        BmpGetDimensions(a->row_bitmap, NULL, NULL, &a->row_stride);
+        if (a->row_bits)
+            a->row_display = BmpCreateBitmapV3(a->row_bitmap, kDensityDouble, a->row_bits, NULL);
+    }
     a->db = pt_store_open();
     Boolean registered = false, feature = false;
     UInt16 card = 0;
@@ -977,7 +958,10 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
         do {
             EventType event;
             UInt16 menu_error = errNone;
-            EvtGetEvent(&event, a->pumping || a->key_job ? 1 : evtWaitForever);
+            /* A queued key job can always do another round. Poll for Cancel
+             * or sleep between rounds without sleeping for a tick each time. */
+            Int32 wait = a->key_job ? 0 : a->pumping ? 1 : evtWaitForever;
+            EvtGetEvent(&event, wait);
             if (event.eType == appStopEvent) break;
             if (a->sleep_pending) {
                 a->sleep_pending = false;
