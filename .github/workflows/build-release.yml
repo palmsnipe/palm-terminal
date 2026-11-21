@@ -1,0 +1,106 @@
+name: Build Terminal
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ghcr.io/palmsnipe/palm-toolchain-sdk@sha256:2c441bfa432785cf90e34fb5f4efe241c07a9e3666ee475119d856f96db3299f
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    steps:
+      - name: Check out Terminal
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Verify release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          prc_version="$(sed -n 's/^VERSION ID AppVersion "\([^"]*\)"$/\1/p' resources/app.rcp)"
+          display_version="$(sed -n 's/^STRING ID AppVersion "\([^"]*\)"$/\1/p' resources/app.rcp)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || "$version" != "$prc_version" || "$version" != "$display_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME must match both AppVersion resources in resources/app.rcp." >&2
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends openssh-client python3
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Verify toolchain
+        run: make -C "$PALM_TOOLCHAIN_ROOT" check
+
+      - name: Build and test Terminal
+        run: make -j2 test
+
+      - name: Upload Terminal PRC
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: terminal-${{ github.sha }}
+          path: build/Terminal.prc
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Package upstream sources for the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: tar -cf build/Terminal-dependencies.tar -C build/deps font.tar openssh.tar vterm.tar wolfssh.tar wolfssl.tar
+
+      - name: Upload upstream sources
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: terminal-dependencies-${{ github.sha }}
+          path: build/Terminal-dependencies.tar
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified build and source archives
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: terminal-*${{ github.sha }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create draft release
+        working-directory: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum Terminal.prc Terminal-dependencies.tar > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" Terminal.prc Terminal-dependencies.tar SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "Terminal ${GITHUB_REF_NAME#v}" \
+            --notes 'Install `Terminal.prc` on a Tungsten E2 or Palm TX. See the tagged README for connection, randomness, and key setup. `Terminal-dependencies.tar` contains the upstream sources used by this build.'

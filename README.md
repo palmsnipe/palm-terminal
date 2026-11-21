@@ -16,7 +16,7 @@ Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH t
 
 ## Install and connect
 
-1. [Build the PRC](#build-and-test), then install `build/Terminal.prc` with HotSync or from an SD card. Set up the Palm's network connection in Preferences.
+1. Download `Terminal.prc` from [GitHub Releases](https://github.com/palmsnipe/palm-terminal/releases) or [build it from source](#build-and-test). Install it with HotSync or from an SD card, then set up the Palm's network connection in Preferences.
 2. Enter the host, port, and username, then choose **Connect**. If Terminal needs randomness, draw in the box until the bar fills, lift the stylus, and tap **Use seed** to continue. Subsequent connections reuse the saved generator state automatically.
 3. On first contact, compare the `SHA256:` fingerprint with the value obtained through a trusted route, such as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` at the server console. **Copy** puts the full fingerprint on the Palm clipboard. Choose **Trust** if the fingerprints match, then enter your password or private-key passphrase. On relaunch, the last successful profile is ready to connect again.
 4. If the server key has changed, verify the replacement through a trusted source. Use **Saved key** in the warning, or select the connection in **Profiles** and open **Host key…**. Use **Forget key** there to clear the old pin, then reconnect and verify the replacement.
@@ -80,6 +80,12 @@ build/host-test shell 14229 palmtest /path/to/test_id_ed25519 import-pass
 ```
 
 See [Tungsten E2 verification](tests/E2.md) for the emulator setup and performance measurements, [Palm TX verification](tests/TX.md) for display and rotation, and [workflow verification](tests/UX.md) for the toolbar, reconnect, and settings.
+
+### Automated builds and releases
+
+GitHub Actions runs `make test` on pushes to `main` and on manual runs. Each successful build keeps `Terminal.prc` as a workflow artifact for 30 days. The workflow uses the pinned Palm toolchain image. The repository needs **Read** access under **Manage Actions access** in the private `palm-toolchain-sdk` package settings.
+
+To create a release, set both `AppVersion` resources in `resources/app.rcp`, push the version commit, and push the matching tag, such as `v0.1.0`. A passing tag build creates a draft release with `Terminal.prc`, the upstream source archives, and SHA-256 checksums. Review the draft before publishing it on GitHub.
 
 ## Compatibility
 
