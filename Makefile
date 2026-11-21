@@ -7,6 +7,7 @@ PREFIX := $(if $(PALM_TOOLCHAIN_PREFIX),$(PALM_TOOLCHAIN_PREFIX),$(TOOLCHAIN_ROO
 SDK := $(PREFIX)/palmdev/sdk/include
 CC := $(PREFIX)/bin/m68k-none-elf-gcc
 OBJCOPY := $(PREFIX)/bin/m68k-none-elf-objcopy
+READELF := $(PREFIX)/bin/m68k-none-elf-readelf
 SIZE := $(PREFIX)/bin/m68k-none-elf-size
 PILRC := $(PREFIX)/bin/pilrc
 BUILD_PRC := $(PREFIX)/bin/build-prc
@@ -50,7 +51,7 @@ $(BUILD_DIR)/%.o: src/%.c resources/resource.h Makefile | $(BUILD_DIR)
 $(ELF): $(OBJECTS) linker.lkr
 	$(CC) -o $@.stage1 $(LDFLAGS) -Wl,--emit-relocs $(OBJECTS)
 	node $(TOOLCHAIN_ROOT)/tools/generate-m68k-relocs.mjs \
-		$@.stage1 $(BUILD_DIR)/reloc_offsets.s $(PREFIX)/bin/m68k-none-elf-readelf
+		$@.stage1 $(BUILD_DIR)/reloc_offsets.s $(READELF)
 	$(CC) $(ABI_FLAGS) -c $(BUILD_DIR)/reloc_offsets.s -o $(BUILD_DIR)/reloc_offsets.o
 	$(CC) -o $@ $(LDFLAGS) -Wl,--emit-relocs $(OBJECTS) $(BUILD_DIR)/reloc_offsets.o
 	rm -f $@.stage1
@@ -73,6 +74,7 @@ $(PRC): $(RESOURCES)
 test: $(PRC) host-test
 	node $(TOOLCHAIN_ROOT)/tools/validate-prc.mjs \
 		$(PRC) '$(APP_DB_NAME)' $(APP_TYPE) $(APP_CREATOR)
+	python3 tests/relocations.py $(READELF) $(ELF) $(CODE)
 	python3 tools/arm_image.py verify $(PRC) $(BUILD_DIR)/arm.bin
 
 clean:

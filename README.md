@@ -72,7 +72,7 @@ make PALM_TOOLCHAIN_ROOT=/path/to/palm-toolchain
 make test PALM_TOOLCHAIN_ROOT=/path/to/palm-toolchain
 ```
 
-`make test` validates the PRC and ARM resources, checks stylus input and seed mixing, and checks Ed25519 import, encryption, and generation against desktop OpenSSH. For an additional local test against a disposable OpenSSH test server, run either command with a synthetic test account. The test opens a PTY and transfers enough output to exercise rekeying when the test server uses `RekeyLimit 64K`.
+`make test` validates the PRC, 68K relocations, and ARM resources, checks stylus input and seed mixing, and checks Ed25519 import, encryption, and generation against desktop OpenSSH. For an additional local test against a disposable OpenSSH test server, run either command with a synthetic test account. The test opens a PTY and transfers enough output to exercise rekeying when the test server uses `RekeyLimit 64K`.
 
 ```sh
 build/host-test shell 14229 palmtest - terminal-test
@@ -83,9 +83,9 @@ See [Tungsten E2 verification](tests/E2.md) for the emulator setup and performan
 
 ### Automated builds and releases
 
-GitHub Actions runs `make test` on pushes to `main` and on manual runs. Each successful build keeps `Terminal.prc` as a workflow artifact for 30 days. The workflow uses the pinned Palm toolchain image. The repository needs **Read** access under **Manage Actions access** in the private `palm-toolchain-sdk` package settings.
+GitHub Actions runs `make test` on pushes to `main` and on manual runs. Each successful build keeps `Terminal.prc` as a workflow artifact for 30 days. The workflow uses the pinned Palm SDK image and a pinned checkout of the Palm toolchain build scripts. The repository needs **Read** access under **Manage Actions access** in the private `palm-toolchain-sdk` package settings.
 
-To create a release, set both `AppVersion` resources in `resources/app.rcp`, push the version commit, and push the matching tag, such as `v0.1.0`. A passing tag build creates a draft release with `Terminal.prc`, the upstream source archives, and SHA-256 checksums. Review the draft before publishing it on GitHub.
+To create a release, set both `AppVersion` resources in `resources/app.rcp`, push the version commit, and push the matching tag, such as `v0.1.1`. A passing tag build creates a draft release with `Terminal.prc`, the upstream source archives, and SHA-256 checksums. Review the draft before publishing it on GitHub.
 
 ## Compatibility
 
