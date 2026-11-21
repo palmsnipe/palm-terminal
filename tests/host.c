@@ -34,7 +34,7 @@ static void seed_for_test(void)
     uint8_t step[sizeof(PtSeedIO) + PT_SEED_STATE], first[32], second[32];
     PtSeedIO *result = (PtSeedIO *)step;
     check(pt_random(first, sizeof(first)) != 0, "Seedless RNG returned success");
-    check(pt_dispatch(PT_IMPORT_SEED, original, 0, 0) == PT_OK, "Seed fixture failed");
+    check(pt_dispatch(PT_SEED_INIT, original, 0, 0) == PT_OK, "Seed fixture failed");
     memcpy(step + sizeof(*result), original + PT_SEED_SIZE, PT_SEED_STATE);
     step[sizeof(step) - 1] ^= 1;
     check(pt_dispatch(PT_NEXT_SEED, step, 0, 0) != PT_OK, "Bad seed checksum was accepted");
@@ -47,6 +47,44 @@ static void seed_for_test(void)
     check(pt_dispatch(PT_USE_SEED, result->working, 0, 0) == PT_OK &&
           pt_random(second, sizeof(second)) == 0 && memcmp(first, second, sizeof(first)),
           "RNG output repeated across state advances");
+}
+
+static void stylus_test(void)
+{
+    PtStylusSample samples[PT_STYLUS_POINTS + 2] = {{.phase = PT_STYLUS_DOWN}};
+    const uint32_t count = sizeof(samples) / sizeof(*samples);
+    samples[count - 1].phase = PT_STYLUS_UP;
+    for (uint32_t i = 1; i <= PT_STYLUS_POINTS; i++) {
+        samples[i].phase = PT_STYLUS_MOVE;
+        pt_put_le32(samples[i].tick, i);
+    }
+    check(pt_dispatch(PT_STYLUS_CONDITION, samples, count, 0) == PT_NO_RANDOM,
+          "Stationary stylus input was accepted");
+    for (uint32_t i = 1; i <= PT_STYLUS_POINTS; i++) pt_put_le32(samples[i].raw, i);
+    memcpy(samples[1].tick, samples[0].tick, sizeof(samples[0].tick));
+    check(pt_dispatch(PT_STYLUS_CONDITION, samples, count, 0) == PT_NO_RANDOM,
+          "A same-tick move counted toward the minimum");
+    pt_put_le32(samples[1].tick, 1);
+    check(pt_dispatch(PT_STYLUS_CONDITION, samples, count - 1, 0) == PT_NO_RANDOM,
+          "An unfinished stroke was accepted");
+    check(pt_dispatch(PT_STYLUS_CONDITION, samples, count, 0) == PT_OK,
+          "Complete stylus input was rejected");
+
+    uint8_t input[PT_SEED_SIZE + PT_SEED_STATE] = {1, 2, 3};
+    uint8_t original[PT_SEED_STATE];
+    uint8_t *state = input + PT_SEED_SIZE;
+    check(pt_dispatch(PT_SEED_INIT, input, 0, 0) == PT_OK, "Could not initialize the mix fixture");
+    memcpy(original, state, sizeof(original));
+    memcpy(input, samples, PT_SEED_SIZE);
+    state[PT_SEED_STATE - 1] ^= 1;
+    check(pt_dispatch(PT_SEED_MIX, input, 0, 0) == PT_NO_RANDOM,
+          "Stylus mixing accepted a corrupt stored state");
+    memcpy(state, original, sizeof(original));
+    check(pt_dispatch(PT_SEED_MIX, input, 0, 0) == PT_OK &&
+          pt_dispatch(PT_SEED_CHECK, state, 0, 0) == PT_OK &&
+          memcmp(state, original, 64) && !memcmp(state + 64, original + 64, 32),
+          "Stylus mixing did not advance or preserve the expected seed fields");
+    puts("Verified stylus capture validation and existing seed mixing");
 }
 
 static void key_test(int n, const char *const *args)
@@ -160,9 +198,13 @@ static int exercise(int sock, unsigned port, PtLogin *login, PtKeyIO *key, const
 
 int main(int argc, char **argv)
 {
-    check(argc >= 2, "Specify generate, import, or shell");
+    check(argc >= 2, "Specify generate, import, shell, or stylus");
     check(pt_dispatch(PT_BOOT, NULL, 0, 0) == PT_OK, "Native backend initialization failed");
     seed_for_test();
+    if (!strcmp(argv[1], "stylus")) {
+        stylus_test();
+        return 0;
+    }
     if (strcmp(argv[1], "shell")) {
         key_test(argc, (const char *const *)argv);
         return 0;

@@ -6,6 +6,8 @@
 
 #define PT_SEED_SIZE 48
 #define PT_SEED_STATE 128
+#define PT_STYLUS_POINTS 256
+#define PT_STYLUS_MAX_EVENTS (3 * PT_STYLUS_POINTS)
 #define PT_KEY_FILE_MAX 8192
 #define PT_KEY_SAVE_MAX 665
 #define PT_PUBLIC_MAX 100
@@ -18,11 +20,12 @@
 #define PT_CELL_CODE_MASK 0x1fffffUL
 
 enum PtCommand {
-    PT_BOOT = 1, PT_IMPORT_SEED, PT_NEXT_SEED, PT_USE_SEED, PT_FORGET_SEED,
+    PT_BOOT = 1, PT_SEED_INIT, PT_NEXT_SEED, PT_USE_SEED, PT_FORGET_SEED,
     PT_KEY_IMPORT, PT_KEY_GENERATE, PT_KEY_UNLOCK, PT_KEY_SAVE, PT_CLEAR_KEY,
     PT_CONNECT, PT_STOP, PT_FEED, PT_DRAIN, PT_STEP, PT_RESIZE, PT_INPUT,
     PT_DAMAGE, PT_ROW, PT_SCROLL, PT_KEY_STEP, PT_STATS, PT_RASTER_ROW,
-    PT_APPEARANCE, PT_CURSOR_PHASE, PT_RASTER_PREVIEW, PT_LIVE
+    PT_APPEARANCE, PT_CURSOR_PHASE, PT_RASTER_PREVIEW, PT_LIVE,
+    PT_SEED_CHECK, PT_STYLUS_CONDITION, PT_SEED_MIX
 };
 enum PtResult {
     PT_OK = 0, PT_PROGRESS = 1, PT_CONNECTED = 2, PT_CLOSED = 3,
@@ -30,6 +33,7 @@ enum PtResult {
     PT_ERROR = -1, PT_BAD_KEY = -2, PT_NO_RANDOM = -3, PT_NO_MEMORY = -4
 };
 enum { PT_HOST_KEY_UNKNOWN, PT_HOST_KEY_ED25519, PT_HOST_KEY_P256 };
+enum { PT_STYLUS_DOWN = 1, PT_STYLUS_MOVE, PT_STYLUS_UP };
 enum PtKey {
     PT_UP = 0x110000, PT_DOWN, PT_LEFT, PT_RIGHT, PT_ENTER, PT_BACKSPACE,
     PT_TAB, PT_ESC, PT_DELETE, PT_HOME, PT_END, PT_PAGEUP, PT_PAGEDOWN
@@ -68,6 +72,10 @@ typedef struct {
     uint8_t working[PT_SEED_SIZE];
 } PtSeedIO;
 
+typedef struct {
+    uint8_t tick[4], raw[4], phase;
+} PtStylusSample;
+
 static inline uint32_t pt_le32(const uint8_t *p)
 {
     return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
@@ -84,7 +92,10 @@ static inline void pt_put_le32(uint8_t *p, uint32_t value)
 
 int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t value);
 void pt_wipe(void *p, size_t length);
-int pt_seed_import(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE]);
+int pt_seed_init(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE]);
+int pt_seed_check(const uint8_t state[PT_SEED_STATE]);
+int pt_seed_mix(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE]);
+int pt_stylus_condition(PtStylusSample *samples, uint32_t count);
 int pt_seed_next(const uint8_t state[PT_SEED_STATE], PtSeedIO *next);
 int pt_seed_use(const uint8_t seed[PT_SEED_SIZE]);
 void pt_seed_clear(void);

@@ -53,7 +53,6 @@
 #define BusyForm 1700
 #define InfoAlert 1800
 #define ConfirmAlert 1801
-#define SeedNeededAlert 1802
 #define HostChangedAlert 1803
 
 #define SettingsForm 1900
@@ -78,3 +77,6 @@
 #define SettingsThemeList 1919
 #define SettingsBehavior 1920
 #define BehaviorForm 1950
+#define RandomnessForm 2000
+#define UseStylusSeed 2001
+#define RawPenResource 1

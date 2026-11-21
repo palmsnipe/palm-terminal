@@ -227,17 +227,30 @@ static Boolean seed_write(DmOpenRef db, const uint8_t *state)
     return ok;
 }
 
-Boolean pt_seed_install(PtArm *arm, uint8_t seed[PT_SEED_SIZE])
+Boolean pt_seed_install_stylus(PtArm *arm, PtStylusSample *samples, UInt16 count)
 {
-    uint8_t packet[PT_SEED_SIZE + PT_SEED_STATE], old[PT_SEED_STATE];
-    MemMove(packet, seed, PT_SEED_SIZE);
+    if (pt_call(arm, PT_STYLUS_CONDITION, samples, count, 0) != PT_OK) return false;
     DmOpenRef db = open_database(PT_SEED_NAME, SEED_TYPE, true);
-    Boolean ok = db && pt_call(arm, PT_IMPORT_SEED, packet, 0, 0) == PT_OK &&
-        (!seed_read(db, old) || MemCmp(old + 64, packet + PT_SEED_SIZE + 64, 32)) &&
-        seed_write(db, packet + PT_SEED_SIZE);
-    if (db && DmCloseDatabase(db)) ok = false;
+    if (!db) return false;
+    uint8_t packet[PT_SEED_SIZE + PT_SEED_STATE];
+    uint8_t *state = packet + PT_SEED_SIZE;
+    MemMove(packet, samples, PT_SEED_SIZE);
+    Int32 result = seed_read(db, state) ? pt_call(arm, PT_SEED_MIX, packet, 0, 0) : PT_NO_RANDOM;
+    if (result == PT_NO_RANDOM) result = pt_call(arm, PT_SEED_INIT, packet, 0, 0);
+    Boolean ok = result == PT_OK && seed_write(db, state);
+    if (DmCloseDatabase(db)) ok = false;
     pt_wipe(packet, sizeof(packet));
-    pt_wipe(old, sizeof(old));
+    return ok;
+}
+
+Boolean pt_seed_available(PtArm *arm)
+{
+    uint8_t state[PT_SEED_STATE];
+    DmOpenRef db = open_database(PT_SEED_NAME, SEED_TYPE, false);
+    if (!db) return false;
+    Boolean ok = seed_read(db, state) && pt_call(arm, PT_SEED_CHECK, state, 0, 0) == PT_OK;
+    if (DmCloseDatabase(db)) ok = false;
+    pt_wipe(state, sizeof(state));
     return ok;
 }
 

@@ -2,6 +2,7 @@
 #include "arm-resources.rcp"
 
 DATA "code" ID 1 "code0001.bin"
+DATA "pPen" ID RawPenResource "raw-pen.bin"
 
 FORM ID HomeForm AT (0 0 160 160)
 BEGIN
@@ -16,7 +17,7 @@ BEGIN
     BUTTON "Profiles" ID Profiles AT (8 123 68 15)
     BUTTON "Keys" ID Keys AT (84 123 68 15)
     BUTTON "Settings" ID HomeSettings AT (8 142 68 14)
-    BUTTON "Seed setup" ID Seed AT (84 142 68 14)
+    BUTTON "Randomness" ID Seed AT (84 142 68 14)
 END
 
 FORM ID ListForm AT (0 0 160 160)
@@ -146,12 +147,11 @@ BEGIN
     BUTTONS "Continue" "Cancel"
 END
 
-ALERT ID SeedNeededAlert
-INFORMATION
+FORM ID RandomnessForm AT (0 0 160 160)
 BEGIN
-    TITLE "Seed setup required"
-    MESSAGE "Create a seed on your desktop, then copy it to the SD card."
-    BUTTONS "Set up now" "Cancel"
+    TITLE "Randomness"
+    BUTTON "Use seed" ID UseStylusSeed AT (5 142 72 15)
+    BUTTON "Cancel" ID Cancel AT (83 142 72 15)
 END
 
 ALERT ID HostChangedAlert

@@ -8,7 +8,7 @@ Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH t
 
 | Connection profile | SSH key manager |
 | --- | --- |
-| ![Connection form with a saved Ed25519 key selected](docs/screenshots/connection.png) | ![Key manager showing an imported key and a key generated on the Palm](docs/screenshots/ssh-keys.png) |
+| ![Connection form with a saved profile and the Randomness button](docs/screenshots/connection.png) | ![Key manager showing an imported key and a key generated on the Palm](docs/screenshots/ssh-keys.png) |
 
 | Color and UTF-8 in the shell | `top` running in the terminal |
 | --- | --- |
@@ -17,9 +17,15 @@ Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH t
 ## Install and connect
 
 1. [Build the PRC](#build-and-test), then install `build/Terminal.prc` with HotSync or from an SD card. Set up the Palm's network connection in Preferences.
-2. On a trusted desktop, create a seed with `python3 tools/make_seed.py /path/to/SD/PALMTERM.SEED`. Choose **Seed setup** or **Set up now**, enter the SD path, and import the file. Remove the transferred file from the SD card and desktop after import. Provision each installation separately and import a fresh seed after restoring or cloning Palm state.
-3. Enter the host, port, and username, then choose **Connect**. On first contact, compare the `SHA256:` fingerprint with the value obtained through a trusted route, such as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` at the server console. **Copy** puts the full fingerprint on the Palm clipboard. Choose **Trust** if the fingerprints match, then enter your password or private-key passphrase. On relaunch, the last successful profile is ready to connect again.
+2. Enter the host, port, and username, then choose **Connect**. If Terminal needs randomness, draw in the box until the bar fills, lift the stylus, and tap **Use seed** to continue. Subsequent connections reuse the saved generator state automatically.
+3. On first contact, compare the `SHA256:` fingerprint with the value obtained through a trusted route, such as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` at the server console. **Copy** puts the full fingerprint on the Palm clipboard. Choose **Trust** if the fingerprints match, then enter your password or private-key passphrase. On relaunch, the last successful profile is ready to connect again.
 4. If the server key has changed, verify the replacement through a trusted source. Use **Saved key** in the warning, or select the connection in **Profiles** and open **Host key…**. Use **Forget key** there to clear the old pin, then reconnect and verify the replacement.
+
+### Randomness
+
+You can open **Randomness** at any time from the connection screen. The drawing pad uses raw digitizer readings and the timing of stylus movements, based on PalmTLS. Adding a drawing mixes it into any valid saved seed. The sample buffer is cleared when you finish or cancel.
+
+Stylus entropy is experimental. Draw again before connecting after restoring or cloning Palm state. Existing saved randomness works after an app upgrade. A fresh installation needs supported raw stylus input before its first connection or key operation.
 
 ## Using the shell
 
@@ -66,7 +72,7 @@ make PALM_TOOLCHAIN_ROOT=/path/to/palm-toolchain
 make test PALM_TOOLCHAIN_ROOT=/path/to/palm-toolchain
 ```
 
-`make test` validates the PRC and ARM resources and checks Ed25519 import, encryption, and generation against desktop OpenSSH. For an additional local test against a disposable OpenSSH test server, run either command with a synthetic test account. The test opens a PTY and transfers enough output to exercise rekeying when the test server uses `RekeyLimit 64K`.
+`make test` validates the PRC and ARM resources, checks stylus input and seed mixing, and checks Ed25519 import, encryption, and generation against desktop OpenSSH. For an additional local test against a disposable OpenSSH test server, run either command with a synthetic test account. The test opens a PTY and transfers enough output to exercise rekeying when the test server uses `RekeyLimit 64K`.
 
 ```sh
 build/host-test shell 14229 palmtest - terminal-test

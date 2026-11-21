@@ -738,8 +738,14 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
     case PT_BOOT:
         if (!s->ready) s->ready = wolfSSH_Init() == WS_SUCCESS;
         return s->ready ? PT_OK : PT_ERROR;
-    case PT_IMPORT_SEED:
-        return pt_seed_import(buffer, (uint8_t *)buffer + PT_SEED_SIZE);
+    case PT_SEED_INIT:
+        return pt_seed_init(buffer, (uint8_t *)buffer + PT_SEED_SIZE);
+    case PT_SEED_CHECK:
+        return pt_seed_check(buffer);
+    case PT_SEED_MIX:
+        return pt_seed_mix(buffer, (uint8_t *)buffer + PT_SEED_SIZE);
+    case PT_STYLUS_CONDITION:
+        return pt_stylus_condition(buffer, size);
     case PT_NEXT_SEED:
         return pt_seed_next((uint8_t *)buffer + sizeof(PtSeedIO), buffer);
     case PT_USE_SEED:

@@ -21,7 +21,7 @@ ELF := $(BUILD_DIR)/code0001.68k.elf
 CODE := $(BUILD_DIR)/code0001.bin
 RESOURCES := $(BUILD_DIR)/$(APP_ID).ro
 PRC := $(BUILD_DIR)/$(APP_ID).prc
-OBJECTS := $(addprefix $(BUILD_DIR)/,main.o bridge.o storage.o network.o settings.o startup.o)
+OBJECTS := $(addprefix $(BUILD_DIR)/,main.o bridge.o storage.o network.o settings.o stylus.o startup.o)
 DEPS := $(OBJECTS:.o=.d)
 
 SDK_INCLUDES := -isystem$(SDK) -isystem$(SDK)/Core \
@@ -58,7 +58,7 @@ $(ELF): $(OBJECTS) linker.lkr
 $(CODE): $(ELF)
 	$(OBJCOPY) -O binary $< $@ -j .vec -j .text
 
-$(RESOURCES): $(CODE) resources/app.rcp resources/resource.h $(BUILD_DIR)/arm-resources.rcp tools/icon.py
+$(RESOURCES): $(CODE) resources/app.rcp resources/resource.h $(BUILD_DIR)/arm-resources.rcp $(BUILD_DIR)/raw-pen.bin tools/icon.py
 	python3 tools/icon.py $(BUILD_DIR)/icons
 	cd $(BUILD_DIR) && $(PILRC) -ro -o $@ -creator $(APP_CREATOR) \
 		-type $(APP_TYPE) -name '$(APP_DB_NAME)' -I $(ROOT)/resources -I $(BUILD_DIR) \
@@ -83,6 +83,12 @@ clean:
 ARM_CC ?= clang
 ARM_TOOLS := $(PREFIX)/bin/arm-none-eabi
 ARM_LIBGCC := $(shell $(ARM_TOOLS)-gcc -march=armv4t -print-libgcc-file-name)
+
+$(BUILD_DIR)/raw-pen.o: src/raw-pen.S | $(BUILD_DIR)
+	$(ARM_TOOLS)-as -march=armv4t $< -o $@
+
+$(BUILD_DIR)/raw-pen.bin: $(BUILD_DIR)/raw-pen.o
+	$(ARM_TOOLS)-objcopy -O binary -j .text $< $@
 DEP_ROOT := $(BUILD_DIR)/deps
 WOLFSSL := $(DEP_ROOT)/wolfssl
 WOLFSSH := $(DEP_ROOT)/wolfssh
@@ -132,6 +138,7 @@ $(BUILD_DIR)/arm-resources.rcp: $(BUILD_DIR)/arm.bin tools/arm_image.py
 HOST_CC ?= clang
 .PHONY: host-test
 host-test: $(BUILD_DIR)/host-test
+	$(BUILD_DIR)/host-test stylus
 	python3 tests/interop.py $(BUILD_DIR)/host-test
 
 $(BUILD_DIR)/host-test: $(BUILD_DIR)/ssh-internal.c $(BUILD_DIR)/bcrypt-pbkdf.c $(wildcard src/*.h src/bcrypt/*.h) \

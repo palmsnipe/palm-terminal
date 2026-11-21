@@ -73,7 +73,8 @@ Boolean pt_pin_save(DmOpenRef db, const PtProfile *profile, const uint8_t finger
 UInt32 pt_key_store(DmOpenRef db, const Char *label, PtKeyIO *key, UInt16 length);
 Boolean pt_key_stored(DmOpenRef db, UInt32 id, Char label[PT_LABEL_MAX], Char pub[PT_PUBLIC_MAX]);
 UInt16 pt_key_load(DmOpenRef db, UInt32 id, PtKeyIO *key);
-Boolean pt_seed_install(PtArm *arm, uint8_t seed[PT_SEED_SIZE]);
+Boolean pt_seed_install_stylus(PtArm *arm, PtStylusSample *samples, UInt16 count);
+Boolean pt_seed_available(PtArm *arm);
 Boolean pt_seed_reserve(PtArm *arm);
 UInt16 pt_sd_read(const Char *path, void *out, UInt16 capacity);
 Boolean pt_sd_create(const Char *path, const void *data, UInt16 length);

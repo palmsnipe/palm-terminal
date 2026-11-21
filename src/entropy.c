@@ -68,24 +68,83 @@ static int initialize(Generator *g, const uint8_t seed[PT_SEED_SIZE])
     return update(g, seed, PT_SEED_SIZE);
 }
 
-int pt_seed_import(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE])
+int pt_seed_init(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE])
 {
     Generator g;
     int rc = initialize(&g, seed);
-    if (!rc) memcpy(state, &g, sizeof(g));
-    if (!rc) rc = wc_Sha256Hash(seed, PT_SEED_SIZE, state + 64);
-    if (!rc) rc = wc_Sha256Hash(state, 96, state + 96);
+    if (!rc) {
+        memcpy(state, &g, sizeof(g));
+        /* Keep the reserved bytes covered by the PTS1 checksum for upgrades. */
+        memset(state + 64, 0, 32);
+        rc = wc_Sha256Hash(state, 96, state + 96);
+    }
     pt_wipe(&g, sizeof(g));
     return rc;
 }
 
-int pt_seed_next(const uint8_t state[PT_SEED_STATE], PtSeedIO *next)
+int pt_seed_check(const uint8_t state[PT_SEED_STATE])
 {
     uint8_t checksum[32];
+    if (wc_Sha256Hash(state, 96, checksum)) return PT_ERROR;
+    return memcmp(checksum, state + 96, sizeof(checksum)) ? PT_NO_RANDOM : PT_OK;
+}
+
+int pt_seed_mix(const uint8_t seed[PT_SEED_SIZE], uint8_t state[PT_SEED_STATE])
+{
+    int rc = pt_seed_check(state);
+    if (rc) return rc;
     Generator g;
     memcpy(&g, state, sizeof(g));
-    int rc = wc_Sha256Hash(state, 96, checksum);
-    if (!rc && memcmp(checksum, state + 96, 32)) rc = -1;
+    rc = update(&g, seed, PT_SEED_SIZE);
+    if (!rc) memcpy(state, &g, sizeof(g));
+    if (!rc) rc = wc_Sha256Hash(state, 96, state + 96);
+    pt_wipe(&g, sizeof(g));
+    return rc ? PT_ERROR : PT_OK;
+}
+
+/* Like PalmTLS, reject malformed or stationary captures. This validates
+ * the input shape and does not measure the digitizer's physical entropy. */
+int pt_stylus_condition(PtStylusSample *samples, uint32_t count)
+{
+    const PtStylusSample *previous = NULL;
+    unsigned points = 0;
+    if (!samples || count <= PT_STYLUS_POINTS || count > PT_STYLUS_MAX_EVENTS) return PT_NO_RANDOM;
+    for (uint32_t i = 0; i < count; i++) {
+        const PtStylusSample *sample = &samples[i];
+        switch (sample->phase) {
+        case PT_STYLUS_DOWN:
+            if (previous) return PT_NO_RANDOM;
+            previous = sample;
+            break;
+        case PT_STYLUS_MOVE:
+            if (!previous) return PT_NO_RANDOM;
+            if (memcmp(sample->tick, previous->tick, sizeof(sample->tick)) &&
+                memcmp(sample->raw, previous->raw, sizeof(sample->raw))) {
+                points++;
+                previous = sample;
+            }
+            break;
+        case PT_STYLUS_UP:
+            if (!previous) return PT_NO_RANDOM;
+            previous = NULL;
+            break;
+        default:
+            return PT_NO_RANDOM;
+        }
+    }
+    if (previous || points < PT_STYLUS_POINTS) return PT_NO_RANDOM;
+    uint8_t digest[WC_SHA512_DIGEST_SIZE];
+    int rc = wc_Sha512Hash((const uint8_t *)samples, count * sizeof(*samples), digest);
+    if (!rc) memcpy(samples, digest, PT_SEED_SIZE);
+    pt_wipe(digest, sizeof(digest));
+    return rc ? PT_ERROR : PT_OK;
+}
+
+int pt_seed_next(const uint8_t state[PT_SEED_STATE], PtSeedIO *next)
+{
+    Generator g;
+    int rc = pt_seed_check(state);
+    memcpy(&g, state, sizeof(g));
     if (!rc) rc = generate(&g, next->working, sizeof(next->working));
     if (!rc) {
         memcpy(next->next, &g, sizeof(g));

@@ -1,4 +1,5 @@
 #include "palm.h"
+#include "stylus.h"
 #include <Chars.h>
 #include <Graffiti.h>
 #include <Keyboard.h>
@@ -17,8 +18,9 @@
 #define HINT_PREF 2
 #define LAST_PROFILE_PREF 3
 
-enum { InputSeed, InputImport, InputName, InputPublic };
+enum { InputImport, InputName, InputPublic };
 enum { RemotePassword, KeyUnlock, ImportPassword, ProtectKey, ConfirmProtection };
+enum { SeedManual, SeedConnect, SeedGenerate, SeedImport };
 
 typedef struct {
     PtArm arm;
@@ -27,6 +29,7 @@ typedef struct {
     PtProfile profile, host_profile;
     PtLogin login;
     PtAppearance appearance, draft;
+    PtStylus stylus;
     PtKeyIO key_io;
     Char value[PT_PATH_MAX], secret[PT_PASSWORD_MAX], protection[PT_PASSWORD_MAX];
     Char name[PT_LABEL_MAX], line_draft[256];
@@ -41,7 +44,7 @@ typedef struct {
     RectangleType drawn_bounds;
     UInt16 page, row_count, file_size, text_action, secret_action, key_job, cursor_interval;
     UInt16 view_width, view_height, input_area, bitmap_width, drawn_orientation;
-    UInt16 settings_input_area;
+    UInt16 settings_input_area, seed_action;
     Boolean listing_keys, more, generating, pumping, ssh_started, shell, ctrl, typing, stopped;
     Boolean sleep_pending, deferred_sleep, cursor_on;
     Boolean dia, can_rotate, fullscreen, bar_hidden;
@@ -309,6 +312,7 @@ static void stop(App *a)
     a->browsing = false;
     pt_wipe(a->line_draft, sizeof(a->line_draft));
     pt_bitmap_close(&a->preview);
+    pt_stylus_close(&a->stylus);
     a->grid = (PtGrid){0};
     pt_net_close(&a->net);
     pt_call(&a->arm, PT_STOP, NULL, 0, 0);
@@ -318,8 +322,15 @@ static void stop(App *a)
 static Boolean seed_ready(App *a)
 {
     if (pt_seed_reserve(&a->arm)) return true;
-    notice("Import a fresh desktop seed using Seed setup.");
+    notice("Randomness unavailable. Open Randomness and try again.");
     return false;
+}
+
+static void open_randomness(App *a, UInt16 action)
+{
+    a->seed_action = action;
+    pt_stylus_open(&a->stylus);
+    FrmGotoForm(RandomnessForm);
 }
 
 static void ask_text(App *a, UInt16 action, const Char *initial)
@@ -345,8 +356,7 @@ static void start_connection(App *a)
 {
     if (!pt_seed_reserve(&a->arm)) {
         stop(a);
-        if (FrmAlert(SeedNeededAlert) == 0) ask_text(a, InputSeed, "/PALMTERM.SEED");
-        else FrmGotoForm(HomeForm);
+        open_randomness(a, SeedConnect);
         return;
     }
     MemSet(a->detail, sizeof(a->detail), 0);
@@ -362,6 +372,17 @@ static void start_connection(App *a)
     FrmGotoForm(BusyForm);
 }
 
+static void connect_profile(App *a)
+{
+    MemSet(&a->login, sizeof(a->login), 0);
+    StrCopy(a->login.user, a->profile.user);
+    a->login.appearance = a->appearance;
+    a->login.key_auth = a->profile.key != 0;
+    a->login.pinned = pt_pin_find(a->db, &a->profile, a->login.fingerprint) != 0;
+    if (a->login.pinned) authentication(a);
+    else start_connection(a);
+}
+
 static void connect(App *a)
 {
     home_input(a);
@@ -373,13 +394,8 @@ static void connect(App *a)
         notice("Select an available key or choose Use password.");
         return;
     }
-    MemSet(&a->login, sizeof(a->login), 0);
-    StrCopy(a->login.user, a->profile.user);
-    a->login.appearance = a->appearance;
-    a->login.key_auth = a->profile.key != 0;
-    a->login.pinned = pt_pin_find(a->db, &a->profile, a->login.fingerprint) != 0;
-    if (a->login.pinned) authentication(a);
-    else start_connection(a);
+    if (pt_seed_available(&a->arm)) connect_profile(a);
+    else open_randomness(a, SeedConnect);
 }
 
 static void remember_profile(App *a, UInt32 id)
@@ -502,6 +518,14 @@ static UInt32 selected(App *a)
     return a->rows_id[row];
 }
 
+static void prepare_key(App *a, Boolean generate)
+{
+    clear_credentials(a);
+    a->generating = generate;
+    if (generate) ask_text(a, InputName, "Palm E2");
+    else ask_text(a, InputImport, "/id_ed25519");
+}
+
 static void list_controls(App *a, UInt16 action)
 {
     if (action == Back) {
@@ -522,10 +546,8 @@ static void list_controls(App *a, UInt16 action)
         return;
     }
     if (action == Generate || action == Import) {
-        clear_credentials(a);
-        a->generating = action == Generate;
-        if (a->generating) ask_text(a, InputName, "Palm E2");
-        else ask_text(a, InputImport, "/id_ed25519");
+        if (pt_seed_available(&a->arm)) prepare_key(a, action == Generate);
+        else open_randomness(a, action == Generate ? SeedGenerate : SeedImport);
         return;
     }
     UInt32 id = selected(a);
@@ -558,6 +580,38 @@ static void key_done(App *a)
     go_list(a, true);
 }
 
+static void leave_randomness(App *a, Boolean saved)
+{
+    UInt16 action = a->seed_action;
+    a->seed_action = SeedManual;
+    pt_stylus_close(&a->stylus);
+    if (saved && action == SeedConnect) connect_profile(a);
+    else if (action == SeedGenerate || action == SeedImport) {
+        if (saved) prepare_key(a, action == SeedGenerate);
+        else key_done(a);
+    } else {
+        if (saved) notice("Randomness saved.");
+        FrmGotoForm(HomeForm);
+    }
+}
+
+static void randomness_controls(App *a, UInt16 control)
+{
+    if (control == Cancel) {
+        leave_randomness(a, false);
+    } else if (control == UseStylusSeed && !a->stylus.down &&
+               a->stylus.samples && a->stylus.points == PT_STYLUS_POINTS) {
+        if (pt_seed_install_stylus(&a->arm, a->stylus.samples, a->stylus.count)) {
+            leave_randomness(a, true);
+        } else {
+            pt_stylus_open(&a->stylus);
+            notice("Could not save the seed. Draw again to retry.");
+            WinEraseWindow();
+            pt_stylus_draw(&a->stylus);
+        }
+    }
+}
+
 static void text_done(App *a)
 {
     get_field(Value, a->value, sizeof(a->value));
@@ -584,18 +638,7 @@ static void text_done(App *a)
         notice("Enter the full SD path starting with /.");
         return;
     }
-    if (a->text_action == InputSeed) {
-        uint8_t seed[PT_SEED_SIZE];
-        UInt16 size = pt_sd_read(a->value, seed, sizeof(seed));
-        Boolean ok = size == sizeof(seed) && pt_seed_install(&a->arm, seed);
-        pt_wipe(seed, sizeof(seed));
-        if (!ok) {
-            notice("Use a new 48-byte seed from the desktop helper.");
-            return;
-        }
-        notice("Seed installed. Remove the seed file from the SD card and desktop.");
-        FrmGotoForm(HomeForm);
-    } else if (a->text_action == InputImport) {
+    if (a->text_action == InputImport) {
         a->file_size = pt_sd_read(a->value, a->key_io.file, sizeof(a->key_io.file));
         if (!a->file_size) {
             notice("Could not read the key from SD. Check the path and card.");
@@ -1198,6 +1241,10 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
     }
     a->drawn_bounds = bounds;
     if (a->can_rotate) a->drawn_orientation = SysGetOrientation();
+    if (id == RandomnessForm) {
+        pt_stylus_draw(&a->stylus);
+        return;
+    }
     if (id == ShellForm) {
         if (opening && a->typing) {
             set_field(ShellText, a->line_draft);
@@ -1256,13 +1303,9 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
         text(77, 142, a->listing_keys ? "SSH keys" : "Profiles");
     } else if (id == TextForm) {
         static const Char *const prompt[] = {
-            "Seed file on SD", "OpenSSH key file on SD", "Name for this key", "Public key destination on SD"
+            "OpenSSH key file on SD", "Name for this key", "Public key destination on SD"
         };
         text(8, 40, prompt[a->text_action]);
-        if (a->text_action == InputSeed) {
-            text(8, 87, "Create with tools/make_seed.py");
-            text(8, 100, "on your desktop and copy to SD.");
-        }
     } else if (id == SecretForm) {
         static const Char *const prompt[] = {
             "SSH password", "Saved key passphrase", "OpenSSH key passphrase",
@@ -1348,11 +1391,13 @@ static Boolean on_form(EventType *event)
         else {
             home_input(a);
             if (action == Profiles || action == Keys) go_list(a, action == Keys);
-            else if (action == Seed) ask_text(a, InputSeed, "/PALMTERM.SEED");
+            else if (action == Seed) open_randomness(a, SeedManual);
             else if (action == HomeSettings) open_settings(a);
         }
     } else if (id == ListForm) {
         list_controls(a, action);
+    } else if (id == RandomnessForm) {
+        randomness_controls(a, action);
     } else if (id == ShellForm) {
         shell_controls(a, action);
     } else if (id == ProfileHostForm) {
@@ -1378,7 +1423,7 @@ static Boolean on_form(EventType *event)
             stop(a);
             if (job == PT_KEY_UNLOCK) FrmGotoForm(HomeForm);
             else go_list(a, true);
-        } else if ((id == TextForm && a->text_action != InputSeed) ||
+        } else if (id == TextForm ||
             (id == SecretForm && a->secret_action >= ImportPassword)) key_done(a);
         else {
             stop(a);
@@ -1392,7 +1437,9 @@ static Err on_sleep(SysNotifyParamType *parameters)
 {
     App *a = parameters->userDataP;
     if (!a || a->deferred_sleep || a->stopped) return errNone;
-    if (!a->pumping && !a->key_job && form_id() != SecretForm && form_id() != TextForm) return errNone;
+    UInt16 form = form_id();
+    if (!a->pumping && !a->key_job && form != SecretForm && form != TextForm &&
+        form != RandomnessForm) return errNone;
     SleepEventParamType *sleep = parameters->notifyDetailsP;
     if (sleep) {
         ++sleep->deferSleep;
@@ -1471,7 +1518,8 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
             UInt16 menu_error = errNone;
             /* A queued key job can always do another round. Poll for Cancel
              * or sleep between rounds without sleeping for a tick each time. */
-            Int32 wait = a->key_job ? 0 : a->pumping ? 1 : evtWaitForever;
+            Boolean poll_stylus = a->stylus.down && a->stylus.poll;
+            Int32 wait = a->key_job ? 0 : a->pumping || poll_stylus ? 1 : evtWaitForever;
             EvtGetEvent(&event, wait);
             if (event.eType == appStopEvent) break;
             if (a->sleep_pending) {
@@ -1489,6 +1537,8 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
                 else notice("The SSH connection closed.");
                 continue;
             }
+            if (a->stylus.samples && form_id() == RandomnessForm && pt_stylus_event(&a->stylus, &event))
+                continue;
             if (!SysHandleEvent(&event) && !MenuHandleEvent(NULL, &event, &menu_error)) {
                 if (event.eType == frmLoadEvent) {
                     FormType *form = FrmInitForm(event.data.frmLoad.formID);

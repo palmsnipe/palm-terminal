@@ -27,3 +27,5 @@ cp-uarm --device tx --net-native --mips 100 --sd test-card.img tx-test.session
 Install the PRC into a copy of an initialized TX session and connect to a local SSH fixture as described in the README. Run `stty size`, tap the system input-area arrow or rotation icon, and run `stty size` again in the same shell. Enter fullscreen from the toolbar or session menu, then tap the shell to return.
 
 Verification used an emulator. Physical Palm TX hardware was unavailable.
+
+See [stylus randomness verification](UX.md#stylus-randomness) for the drawing workflow and connections using saved randomness on the TX.

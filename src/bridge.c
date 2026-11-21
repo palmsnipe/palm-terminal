@@ -37,7 +37,8 @@ Int32 pt_call(const PtArm *arm, UInt32 command, void *buffer, UInt32 size, UInt3
     pt_put_le32(packet + 12, size);
     pt_put_le32(packet + 16, value);
     Int32 rc = (Int32)PceNativeCall(arm->entry, packet);
-    if ((command >= PT_KEY_IMPORT && command <= PT_STOP) || command == PT_KEY_STEP ||
+    if ((command >= PT_SEED_INIT && command <= PT_STOP) || command == PT_KEY_STEP ||
+        command == PT_SEED_CHECK || command == PT_STYLUS_CONDITION || command == PT_SEED_MIX ||
         (command == PT_STEP && rc != PT_IDLE && rc != PT_PROGRESS))
         MemSet(align8(arm->stack), ARM_STACK_BYTES, 0);
     return rc;
