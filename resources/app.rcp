@@ -12,12 +12,11 @@ BEGIN
     FIELD ID Port AT (124 34 29 13) EDITABLE SINGLELINE UNDERLINED NUMERIC MAXCHARS 5
     LABEL "Username" AUTOID AT (8 56) FONT 0
     FIELD ID User AT (8 68 144 13) EDITABLE SINGLELINE UNDERLINED MAXCHARS 63
-    BUTTON "Connect" ID Connect AT (8 104 68 15)
-    BUTTON "Profiles" ID Profiles AT (84 104 68 15)
-    BUTTON "Keys" ID Keys AT (8 123 68 15)
-    BUTTON "Seed setup" ID Seed AT (84 123 68 15)
+    BUTTON "Connect" ID Connect AT (8 101 144 18) FONT 1
+    BUTTON "Profiles" ID Profiles AT (8 123 68 15)
+    BUTTON "Keys" ID Keys AT (84 123 68 15)
     BUTTON "Settings" ID HomeSettings AT (8 142 68 14)
-    BUTTON "Forget host" ID ForgetHost AT (84 142 68 14)
+    BUTTON "Seed setup" ID Seed AT (84 142 68 14)
 END
 
 FORM ID ListForm AT (0 0 160 160)
@@ -32,6 +31,7 @@ BEGIN
     BUTTON "Generate" ID Generate AT (83 95 70 14)
     BUTTON "Export .pub" ID Public AT (7 113 70 14)
     BUTTON "Use password" ID UsePassword AT (83 113 70 14)
+    BUTTON "Host key..." ID HostKeyDetails AT (7 95 70 14) NONUSABLE
     BUTTON "Back" ID Back AT (7 140 60 14)
 END
 
@@ -53,8 +53,16 @@ END
 FORM ID TrustForm AT (0 0 160 160)
 BEGIN
     TITLE "Verify host key"
-    BUTTON "Trust" ID Accept AT (8 117 65 15)
-    BUTTON "Cancel" ID Cancel AT (85 117 65 15)
+    BUTTON "Trust" ID Accept AT (8 117 42 15)
+    BUTTON "Copy" ID CopyFingerprint AT (57 117 44 15)
+    BUTTON "Cancel" ID Cancel AT (108 117 44 15)
+END
+
+FORM ID ProfileHostForm AT (0 0 160 160)
+BEGIN
+    TITLE "Saved host key"
+    BUTTON "Forget key" ID ForgetHost AT (8 117 65 15)
+    BUTTON "Back" ID Back AT (85 117 65 15)
 END
 
 FORM ID BusyForm AT (0 0 160 160)
@@ -67,15 +75,16 @@ FORM ID ShellForm AT (0 0 160 160)
 BEGIN
     FIELD ID ShellText AT (1 131 115 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 255 NONUSABLE
     BUTTON "Send" ID Send AT (119 131 39 14) NONUSABLE
-    BUTTON "Ctrl" ID Ctrl AT (1 146 21 13)
-    BUTTON "Esc" ID Esc AT (23 146 17 13)
-    BUTTON "Tab" ID Tab AT (41 146 17 13)
-    BUTTON "^" ID ScrollUp AT (59 146 10 13)
-    BUTTON "v" ID ScrollDown AT (70 146 10 13)
-    BUTTON "Type" ID Type AT (81 146 21 13)
-    BUTTON "Prefs" ID ShellSettings AT (103 146 23 13)
-    BUTTON "Full" ID ShellFull AT (127 146 16 13)
-    BUTTON "End" ID End AT (144 146 15 13)
+    BUTTON "Ctrl" ID Ctrl AT (1 143 24 16)
+    BUTTON "Esc" ID Esc AT (26 143 22 16)
+    BUTTON "Tab" ID Tab AT (49 143 22 16)
+    BUTTON "Type" ID Type AT (72 143 25 16)
+    BUTTON "History" ID History AT (98 143 34 16)
+    BUTTON "Menu" ID ShellMenu AT (133 143 26 16)
+    BUTTON "Older" ID ScrollUp AT (1 143 32 16) NONUSABLE
+    BUTTON "Newer" ID ScrollDown AT (34 143 34 16) NONUSABLE
+    BUTTON "Back to live" ID BackToLive AT (69 143 63 16) NONUSABLE
+    LIST "Fullscreen" "Appearance..." "Copy visible text" "Paste into line" "Disconnect" ID SessionActions AT (52 72 106 63) VISIBLEITEMS 5 NONUSABLE
 END
 
 FORM ID SettingsForm AT (0 0 160 160)
@@ -86,28 +95,39 @@ BEGIN
     LIST "Regular (6x10)" "Small (5x8)" "Large (8x13)" ID SettingsFontList AT (58 18 94 41) VISIBLEITEMS 3 NONUSABLE
     POPUPLIST ID SettingsFont SettingsFontList
 
-    LABEL "Cursor" AUTOID AT (8 37) FONT 0
-    POPUPTRIGGER "Block" ID SettingsShape AT (49 34 61 14) LEFTANCHOR
-    LIST "Block" "Underline" "Bar" "Hidden" ID SettingsShapeList AT (46 34 68 52) VISIBLEITEMS 4 NONUSABLE
+    LABEL "Theme" AUTOID AT (8 37) FONT 0
+    POPUPTRIGGER "Presets..." ID SettingsTheme AT (60 34 92 14) LEFTANCHOR
+    LIST "Light on dark" "Dark on light" "Amber on black" ID SettingsThemeList AT (58 34 94 41) VISIBLEITEMS 3 NONUSABLE
+    POPUPLIST ID SettingsTheme SettingsThemeList
+
+    LABEL "Cursor" AUTOID AT (8 54) FONT 0
+    POPUPTRIGGER "Block" ID SettingsShape AT (49 51 61 14) LEFTANCHOR
+    LIST "Block" "Underline" "Bar" "Hidden" ID SettingsShapeList AT (46 51 68 52) VISIBLEITEMS 4 NONUSABLE
     POPUPLIST ID SettingsShape SettingsShapeList
-    CHECKBOX "Blink" ID SettingsBlink AT (113 34 40 14)
+    CHECKBOX "Blink" ID SettingsBlink AT (113 51 40 14)
 
-    BUTTON "Text" ID SettingsText AT (8 52 37 14)
-    BUTTON "Background" ID SettingsBackground AT (50 52 60 14)
-    BUTTON "Cursor" ID SettingsCursor AT (115 52 39 14)
-    CHECKBOX "Cursor matches text" ID SettingsMatch AT (8 78 140 12)
-
-    LABEL "Scrollback" AUTOID AT (8 94) FONT 0
-    POPUPTRIGGER "96 lines" ID SettingsHistory AT (60 91 92 14) LEFTANCHOR
-    LIST "Off" "48 lines" "96 lines" "192 lines" ID SettingsHistoryList AT (58 88 94 52) VISIBLEITEMS 4 NONUSABLE
-    POPUPLIST ID SettingsHistory SettingsHistoryList
-
-    CHECKBOX "Follow output" ID SettingsFollow AT (8 106 88 14)
-    CHECKBOX "Bell" ID SettingsBell AT (113 106 39 14)
-    CHECKBOX "Bright ANSI bold" ID SettingsBold AT (8 119 139 12)
+    BUTTON "Text" ID SettingsText AT (8 68 37 14)
+    BUTTON "Background" ID SettingsBackground AT (50 68 60 14)
+    BUTTON "Cursor" ID SettingsCursor AT (115 68 39 14)
+    CHECKBOX "Auto cursor color" ID SettingsMatch AT (8 96 97 12)
+    BUTTON "Behavior" ID SettingsBehavior AT (109 95 44 14)
     BUTTON "Defaults" ID SettingsDefaults AT (8 144 43 14)
     BUTTON "Cancel" ID SettingsCancel AT (60 144 42 14)
     BUTTON "Save" ID SettingsSave AT (111 144 42 14)
+END
+
+FORM ID BehaviorForm AT (0 0 160 160)
+BEGIN
+    TITLE "Terminal Behavior"
+    LABEL "Scrollback" AUTOID AT (8 26) FONT 0
+    POPUPTRIGGER "96 lines" ID SettingsHistory AT (60 23 92 14) LEFTANCHOR
+    LIST "Off" "48 lines" "96 lines" "192 lines" ID SettingsHistoryList AT (58 23 94 52) VISIBLEITEMS 4 NONUSABLE
+    POPUPLIST ID SettingsHistory SettingsHistoryList
+
+    CHECKBOX "Follow output" ID SettingsFollow AT (8 47 130 14)
+    CHECKBOX "Audible bell" ID SettingsBell AT (8 68 130 14)
+    CHECKBOX "Bright ANSI bold" ID SettingsBold AT (8 89 130 14)
+    BUTTON "Back" ID Back AT (8 144 54 14)
 END
 
 ALERT ID InfoAlert
@@ -124,6 +144,22 @@ BEGIN
     TITLE "Palm Terminal"
     MESSAGE "^1"
     BUTTONS "Continue" "Cancel"
+END
+
+ALERT ID SeedNeededAlert
+INFORMATION
+BEGIN
+    TITLE "Seed setup required"
+    MESSAGE "Create a seed on your desktop, then copy it to the SD card."
+    BUTTONS "Set up now" "Cancel"
+END
+
+ALERT ID HostChangedAlert
+WARNING
+BEGIN
+    TITLE "Host key changed"
+    MESSAGE "This server presented a different key. Verify the replacement through a trusted source before forgetting the saved key."
+    BUTTONS "Saved key" "Cancel"
 END
 
 APPLICATIONICONNAME ID AppName "Palm Terminal"

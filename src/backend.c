@@ -45,6 +45,7 @@ typedef struct {
     int cursor_phase, bell_pending, alt_screen;
     int cursor_visible, ready, opened, identity_loaded, host_status, host_verified, resize_pending;
     uint32_t key_command;
+    uint8_t host_key_type;
 } Backend;
 
 static Backend session;
@@ -117,6 +118,12 @@ static int verify_host(const byte *key, word32 size, void *user)
         return -1;
     }
     if (!s->login.pinned) {
+        static const byte ed25519[] = "\0\0\0\013ssh-ed25519";
+        static const byte p256[] = "\0\0\0\023ecdsa-sha2-nistp256";
+        if (size >= sizeof(ed25519) - 1 && !memcmp(key, ed25519, sizeof(ed25519) - 1))
+            s->host_key_type = PT_HOST_KEY_ED25519;
+        else if (size >= sizeof(p256) - 1 && !memcmp(key, p256, sizeof(p256) - 1))
+            s->host_key_type = PT_HOST_KEY_P256;
         s->host_status = PT_UNKNOWN_HOST;
         return -1;
     }
@@ -535,12 +542,16 @@ static int raster_preview(const PtPreview *preview, uint32_t stride)
     for (unsigned y = 0; y < PT_PREVIEW_HEIGHT; y++)
         for (unsigned x = 0; x < PT_PREVIEW_WIDTH; x++) pixels[y * pitch + x] = swap565(bg);
 
-    static const char sample[] = "$ echo hello";
-    pixels += ((PT_PREVIEW_HEIGHT - height) / 2) * pitch + 8;
-    for (unsigned i = 0; i < sizeof(sample) - 1; i++)
-        paint_glyph(pixels + i * width, pitch, a->font,
-                    glyph_for(a->font, (uint8_t)sample[i]), fg, bg);
-    paint_cursor(pixels + (sizeof(sample) - 1) * width, pitch, a, glyph_for(a->font, 0), fg, bg);
+    static const char *const sample[] = {"$ ls", "notes.txt  script.sh", "$ "};
+    uint16_t accent = contrasting_color(bg) == 0 ? rgb565(20, 85, 165) : rgb565(92, 156, 240);
+    pixels += ((PT_PREVIEW_HEIGHT - 3 * height) / 2) * pitch + 8;
+    for (unsigned row = 0; row < 3; row++) {
+        uint16_t *dest = pixels + row * height * pitch;
+        for (unsigned i = 0; sample[row][i]; i++)
+            paint_glyph(dest + i * width, pitch, a->font,
+                        glyph_for(a->font, (uint8_t)sample[row][i]), row == 1 && i >= 11 ? accent : fg, bg);
+    }
+    paint_cursor(pixels + 2 * height * pitch + 2 * width, pitch, a, glyph_for(a->font, 0), fg, bg);
     return PT_OK;
 }
 #endif
@@ -631,6 +642,7 @@ static int step(Backend *s, uint8_t *details)
     if (!s->opened) {
         int rc = wolfSSH_connect(s->ssh);
         if (s->host_status != PT_OK) {
+            details[0] = s->host_key_type;
             memcpy(details + 4, s->fingerprint, 32);
             return s->host_status;
         }
@@ -806,6 +818,7 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
         pt_put_le32(frame->rows, s->dirty[0]);
         pt_put_le32(frame->rows + 4, s->dirty[1]);
         frame->bell = (uint8_t)s->bell_pending;
+        frame->history_offset = (uint8_t)s->history_offset;
         int ready = s->dirty[0] || s->dirty[1] || s->bell_pending;
         s->dirty[0] = s->dirty[1] = 0;
         s->bell_pending = 0;
@@ -819,13 +832,21 @@ int32_t pt_dispatch(uint32_t command, void *buffer, uint32_t size, uint32_t valu
     case PT_RASTER_PREVIEW:
         return raster_preview(buffer, size);
 #endif
+    case PT_LIVE:
+        if (s->history_offset) {
+            s->history_offset = 0;
+            damage_all(s);
+        }
+        return PT_OK;
     case PT_SCROLL: {
         if (s->alt_screen) return 0;
         int offset = (int)s->history_offset + (int32_t)value;
         if (offset < 0) offset = 0;
         if (offset > (int)s->history_count) offset = (int)s->history_count;
-        s->history_offset = (unsigned)offset;
-        damage_all(s);
+        if ((unsigned)offset != s->history_offset) {
+            s->history_offset = (unsigned)offset;
+            damage_all(s);
+        }
         return offset;
     }
     default:

@@ -1,6 +1,6 @@
 # Palm TX verification
 
-CloudpilotEmu ran a Palm TX at 100 MIPS with a supplied TX session, a disposable SD card, and native NetLib redirection to an isolated OpenSSH server. The same PRC also ran on the Tungsten E2.
+CloudpilotEmu ran commit `84dbe0f` on a Palm TX at 100 MIPS with a supplied TX session, a disposable SD card, and native NetLib redirection to an isolated OpenSSH server. The same PRC also ran on the Tungsten E2.
 
 One live SSH session with the regular 6×10 font reported the following dimensions via `stty size`.
 
@@ -24,6 +24,6 @@ Running `exit` from landscape fullscreen restored the status bar and returned to
 cp-uarm --device tx --net-native --mips 100 --sd test-card.img tx-test.session
 ```
 
-Install the PRC into a copy of an initialized TX session and connect to a local SSH fixture as described in the README. Run `stty size`, tap the system input-area arrow or rotation icon, and run `stty size` again in the same shell. Tap **Full** to hide the toolbar and system chrome, then tap the shell to return.
+Install the PRC into a copy of an initialized TX session and connect to a local SSH fixture as described in the README. Run `stty size`, tap the system input-area arrow or rotation icon, and run `stty size` again in the same shell. Enter fullscreen from the toolbar or session menu, then tap the shell to return.
 
 Verification used an emulator. Physical Palm TX hardware was unavailable.

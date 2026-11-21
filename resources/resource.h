@@ -10,6 +10,7 @@
 #define Seed 1107
 #define ForgetHost 1108
 #define HomeSettings 1109
+#define HostKeyDetails 1110
 
 #define ListForm 1200
 #define Items 1201
@@ -29,6 +30,8 @@
 #define Cancel 1303
 #define SecretForm 1400
 #define TrustForm 1500
+#define CopyFingerprint 1501
+#define ProfileHostForm 1550
 #define ShellForm 1600
 #define Ctrl 1601
 #define Esc 1602
@@ -36,14 +39,22 @@
 #define ScrollUp 1604
 #define ScrollDown 1605
 #define Type 1606
-#define End 1607
+#define ShellMenu 1607
 #define ShellText 1608
 #define Send 1609
 #define ShellSettings 1610
 #define ShellFull 1611
+#define History 1612
+#define BackToLive 1613
+#define SessionActions 1614
+#define Disconnect 1615
+#define CopyScreen 1616
+#define PasteLine 1617
 #define BusyForm 1700
 #define InfoAlert 1800
 #define ConfirmAlert 1801
+#define SeedNeededAlert 1802
+#define HostChangedAlert 1803
 
 #define SettingsForm 1900
 #define SettingsFont 1901
@@ -63,3 +74,7 @@
 #define SettingsDefaults 1915
 #define SettingsCancel 1916
 #define SettingsSave 1917
+#define SettingsTheme 1918
+#define SettingsThemeList 1919
+#define SettingsBehavior 1920
+#define BehaviorForm 1950

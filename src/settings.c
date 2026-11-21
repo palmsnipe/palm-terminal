@@ -73,22 +73,27 @@ void pt_paint_rgb(Coord x, Coord y, Coord width, Coord height, const uint8_t rgb
 static void swatch(Coord x, Coord width, const uint8_t rgb[3])
 {
     RectangleType rect;
-    RctSetRectangle(&rect, x, 70, width, 6);
-    pt_paint_rgb(x, 70, width, 6, rgb);
+    RctSetRectangle(&rect, x, 86, width, 6);
+    pt_paint_rgb(x, 86, width, 6, rgb);
     WinDrawRectangleFrame(simpleFrame, &rect);
 }
 
 void pt_settings_draw(const PtArm *arm, const PtAppearance *a, PtBitmap *preview)
 {
     FormType *form = FrmGetActiveForm();
+    if (FrmGetFormId(form) == BehaviorForm) {
+        set_popup(form, SettingsHistory, SettingsHistoryList, a->history);
+        CtlSetValue(form_object(form, SettingsFollow), !!(a->flags & PT_FOLLOW_OUTPUT));
+        CtlSetValue(form_object(form, SettingsBell), !!(a->flags & PT_AUDIBLE_BELL));
+        CtlSetValue(form_object(form, SettingsBold), !!(a->flags & PT_BRIGHT_BOLD));
+        FrmDrawForm(form);
+        return;
+    }
     set_popup(form, SettingsFont, SettingsFontList, a->font);
     set_popup(form, SettingsShape, SettingsShapeList, a->shape);
-    set_popup(form, SettingsHistory, SettingsHistoryList, a->history);
+    CtlSetLabel(form_object(form, SettingsTheme), "Presets...");
     CtlSetValue(form_object(form, SettingsMatch), !!(a->flags & PT_CURSOR_AUTO));
     CtlSetValue(form_object(form, SettingsBlink), !!(a->flags & PT_CURSOR_BLINK));
-    CtlSetValue(form_object(form, SettingsFollow), !!(a->flags & PT_FOLLOW_OUTPUT));
-    CtlSetValue(form_object(form, SettingsBell), !!(a->flags & PT_AUDIBLE_BELL));
-    CtlSetValue(form_object(form, SettingsBold), !!(a->flags & PT_BRIGHT_BOLD));
     CtlSetEnabled(form_object(form, SettingsBlink), a->shape != PT_CURSOR_HIDDEN);
     FrmDrawForm(form);
     swatch(10, 33, a->text);
@@ -100,7 +105,7 @@ void pt_settings_draw(const PtArm *arm, const PtAppearance *a, PtBitmap *preview
     pt_put_le32(sample.pixels, (UInt32)preview->bits);
     if (pt_call(arm, PT_RASTER_PREVIEW, &sample, preview->stride, 0) == PT_OK) {
         UInt16 coords = WinSetCoordinateSystem(kCoordinatesNative);
-        WinDrawBitmap((BitmapType *)preview->display, 16, 263);
+        WinDrawBitmap((BitmapType *)preview->display, 16, 230);
         WinSetCoordinateSystem(coords);
     }
 }
@@ -124,6 +129,14 @@ Boolean pt_settings_change(PtAppearance *a, const EventType *event)
         if (id == SettingsFont && choice >= 0 && choice < PT_FONT_COUNT) a->font = choice;
         else if (id == SettingsShape && choice >= 0 && choice < PT_CURSOR_COUNT) a->shape = choice;
         else if (id == SettingsHistory && choice >= 0 && choice < PT_HISTORY_COUNT) a->history = choice;
+        else if (id == SettingsTheme && choice >= 0 && choice < 3) {
+            static const uint8_t themes[3][6] = {
+                {232, 232, 232, 0, 0, 0}, {24, 24, 24, 250, 248, 240}, {255, 195, 92, 0, 0, 0}
+            };
+            MemMove(a->text, themes[choice], 3);
+            MemMove(a->background, themes[choice] + 3, 3);
+            a->flags |= PT_CURSOR_AUTO;
+        }
         else return false;
         return true;
     }

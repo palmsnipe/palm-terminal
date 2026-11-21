@@ -4,6 +4,7 @@
 #include <Keyboard.h>
 #include <NotifyMgr.h>
 #include <PenInputMgr.h>
+#include <Preferences.h>
 #include "resource.h"
 
 #define APP_FEATURE 0
@@ -11,8 +12,10 @@
 #define SLEEP_EVENT (firstUserEvent + 1)
 #define SSH_ENDED_EVENT (firstUserEvent + 2)
 #define CONNECT_TIMEOUT 45UL
-#define SHELL_TOOLBAR 15
+#define SHELL_TOOLBAR 18
 #define SHELL_LINE 15
+#define HINT_PREF 2
+#define LAST_PROFILE_PREF 3
 
 enum { InputSeed, InputImport, InputName, InputPublic };
 enum { RemotePassword, KeyUnlock, ImportPassword, ProtectKey, ConfirmProtection };
@@ -21,7 +24,7 @@ typedef struct {
     PtArm arm;
     PtNet net;
     DmOpenRef db;
-    PtProfile profile;
+    PtProfile profile, host_profile;
     PtLogin login;
     PtAppearance appearance, draft;
     PtKeyIO key_io;
@@ -32,15 +35,17 @@ typedef struct {
     Char rows_text[PAGE_SIZE][42];
     Char *choices[PAGE_SIZE];
     UInt32 target_key, timestamp, cursor_deadline;
-    UInt32 pin_version;
+    UInt32 pin_version, hint_deadline, last_profile_id;
     Int32 ssh_end_reason;
     PtGrid grid;
     RectangleType drawn_bounds;
     UInt16 page, row_count, file_size, text_action, secret_action, key_job, cursor_interval;
     UInt16 view_width, view_height, input_area, bitmap_width, drawn_orientation;
+    UInt16 settings_input_area;
     Boolean listing_keys, more, generating, pumping, ssh_started, shell, ctrl, typing, stopped;
     Boolean sleep_pending, deferred_sleep, cursor_on;
     Boolean dia, can_rotate, fullscreen, bar_hidden;
+    Boolean browsing, hint_seen, hint_visible, host_key_from_home, restore_settings_area;
 #ifdef PT_PROFILE
     UInt32 heap_at_launch, handshake_ticks, key_ticks;
 #endif
@@ -155,6 +160,7 @@ static void leave_fullscreen(App *a)
 {
     if (!a->fullscreen) return;
     a->fullscreen = false;
+    a->hint_visible = false;
     if (a->bar_hidden) {
         StatShow();
         a->bar_hidden = false;
@@ -168,6 +174,11 @@ static void leave_fullscreen(App *a)
 static void enter_fullscreen(App *a)
 {
     a->fullscreen = true;
+    if (!a->hint_seen) {
+        a->hint_seen = a->hint_visible = true;
+        a->hint_deadline = TimGetTicks() + 3UL * SysTicksPerSecond();
+        PrefSetAppPreferences(PT_CREATOR, HINT_PREF, 1, &a->hint_seen, sizeof(a->hint_seen), true);
+    }
     if (!a->dia) return;
     a->input_area = PINGetInputAreaState();
     PINSetInputAreaState(pinInputAreaClosed);
@@ -295,6 +306,7 @@ static void stop(App *a)
     a->shell = false;
     a->typing = false;
     a->ctrl = false;
+    a->browsing = false;
     pt_wipe(a->line_draft, sizeof(a->line_draft));
     pt_bitmap_close(&a->preview);
     a->grid = (PtGrid){0};
@@ -331,9 +343,10 @@ static void authentication(App *a)
 
 static void start_connection(App *a)
 {
-    if (!seed_ready(a)) {
+    if (!pt_seed_reserve(&a->arm)) {
         stop(a);
-        FrmGotoForm(HomeForm);
+        if (FrmAlert(SeedNeededAlert) == 0) ask_text(a, InputSeed, "/PALMTERM.SEED");
+        else FrmGotoForm(HomeForm);
         return;
     }
     MemSet(a->detail, sizeof(a->detail), 0);
@@ -360,10 +373,6 @@ static void connect(App *a)
         notice("Select an available key or choose Use password.");
         return;
     }
-    if (!pt_profile_save(a->db, &a->profile)) {
-        notice("Could not save this connection profile.");
-        return;
-    }
     MemSet(&a->login, sizeof(a->login), 0);
     StrCopy(a->login.user, a->profile.user);
     a->login.appearance = a->appearance;
@@ -373,11 +382,21 @@ static void connect(App *a)
     else start_connection(a);
 }
 
-static void fingerprint_text(const uint8_t *digest, Char out[44])
+static void remember_profile(App *a, UInt32 id)
+{
+    if (a->last_profile_id == id) return;
+    uint8_t saved[4];
+    pt_put_le32(saved, id);
+    PrefSetAppPreferences(PT_CREATOR, LAST_PROFILE_PREF, 1, saved, sizeof(saved), true);
+    a->last_profile_id = id;
+}
+
+static void fingerprint_text(const uint8_t *digest, Char out[51])
 {
     static const Char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     UInt32 bits = 0;
-    UInt16 remaining = 0, output = 0;
+    UInt16 remaining = 0, output = 7;
+    MemMove(out, "SHA256:", output);
     for (UInt16 i = 0; i < 32; i++) {
         bits = (bits << 8) | digest[i];
         remaining += 8;
@@ -388,6 +407,28 @@ static void fingerprint_text(const uint8_t *digest, Char out[44])
     }
     if (remaining) out[output++] = alphabet[(bits << (6 - remaining)) & 63];
     out[output] = 0;
+}
+
+static void draw_fingerprint(const uint8_t *digest, Coord y)
+{
+    Char fingerprint[51];
+    fingerprint_text(digest, fingerprint);
+    for (const Char *line = fingerprint; *line; y += 11) {
+        Int16 length = StrLen(line), width = 144;
+        Boolean fit;
+        FntCharsInWidth(line, &width, &length, &fit);
+        if (!length) break;
+        WinDrawChars(line, length, 8, y);
+        line += length;
+    }
+}
+
+static void copy_fingerprint(const App *a)
+{
+    Char fingerprint[51];
+    fingerprint_text(a->detail + 4, fingerprint);
+    ClipboardAddItem(clipboardText, fingerprint, StrLen(fingerprint));
+    notice("Fingerprint copied.");
 }
 
 static void trust(App *a)
@@ -493,10 +534,16 @@ static void list_controls(App *a, UInt16 action)
         if (a->listing_keys) a->profile.key = id;
         else if (!pt_profile_read(a->db, id, &a->profile)) return;
         FrmGotoForm(HomeForm);
+    } else if (action == HostKeyDetails) {
+        if (pt_profile_read(a->db, id, &a->host_profile)) {
+            a->host_key_from_home = false;
+            FrmGotoForm(ProfileHostForm);
+        }
     } else if (action == Remove && confirm(a->listing_keys ? "Delete this private key?" : "Delete this profile?")) {
         if (!pt_record_remove(a->db, id, a->listing_keys ? PT_RECORD_KEY : PT_RECORD_PROFILE))
             notice("Could not delete the selected item.");
         else if (a->listing_keys && a->profile.key == id) a->profile.key = 0;
+        else if (!a->listing_keys && a->last_profile_id == id) remember_profile(a, 0);
         list_page(a);
         FrmDrawForm(FrmGetActiveForm());
     } else if (action == Public) {
@@ -678,11 +725,20 @@ static Boolean secret_key(App *a, const EventType *event)
     return true;
 }
 
+static void switch_settings_form(App *a, UInt16 form)
+{
+    if (a->dia) {
+        a->settings_input_area = PINGetInputAreaState();
+        a->restore_settings_area = a->settings_input_area <= pinInputAreaClosed;
+    }
+    FrmGotoForm(form);
+}
+
 static void open_settings(App *a)
 {
     a->draft = a->appearance;
     if (a->shell && a->typing) get_field(ShellText, a->line_draft, sizeof(a->line_draft));
-    FrmGotoForm(SettingsForm);
+    switch_settings_form(a, SettingsForm);
 }
 
 static void cursor_reset(App *a)
@@ -739,10 +795,14 @@ static Boolean settings_event(App *a, EventType *event)
 {
     if (event->eType == ctlSelectEvent) {
         UInt16 id = event->data.ctlSelect.controlID;
+        if (id == SettingsBehavior || (id == Back && form_id() == BehaviorForm)) {
+            switch_settings_form(a, id == SettingsBehavior ? BehaviorForm : SettingsForm);
+            return true;
+        }
         if (id == SettingsSave || id == SettingsCancel) {
             if (id == SettingsSave && !apply_settings(a)) return true;
             pt_bitmap_close(&a->preview);
-            FrmGotoForm(a->shell ? ShellForm : HomeForm);
+            switch_settings_form(a, a->shell ? ShellForm : HomeForm);
             return true;
         }
     }
@@ -751,13 +811,69 @@ static Boolean settings_event(App *a, EventType *event)
     return true;
 }
 
+static void shell_toolbar(App *a)
+{
+    static const UInt16 live[] = {Ctrl, Esc, Tab, Type, History, ShellMenu};
+    static const UInt16 history[] = {ScrollUp, ScrollDown, BackToLive, ShellMenu};
+    const UInt16 *buttons = a->browsing ? history : live;
+    const UInt16 *hidden = a->browsing ? live : history;
+    Int16 count = a->browsing ? 4 : 6, hidden_count = a->browsing ? 6 : 4;
+    static const Coord live_weights[] = {24, 22, 22, 25, 34, 26};
+    static const Coord history_weights[] = {32, 34, 63, 26};
+    const Coord *weights = a->browsing ? history_weights : live_weights;
+    Coord width = a->view_width / 2, y = (a->view_height / 2) + (a->typing ? SHELL_LINE : 0);
+    for (Int16 i = 0; i < hidden_count; i++) show(hidden[i], false);
+    if (a->fullscreen) {
+        for (Int16 i = 0; i < count; i++) show(buttons[i], false);
+        return;
+    }
+    repaint(0, y, width, SHELL_TOOLBAR);
+    Coord x = 1;
+    for (Int16 i = 0; i < count; i++) {
+        Coord w = i + 1 == count ? width - 1 - x :
+                  weights[i] + (width - 160) / count;
+        RectangleType button;
+        RctSetRectangle(&button, x, y + 1, w, SHELL_TOOLBAR - 2);
+        UInt16 index = object_index(buttons[i]);
+        FrmSetObjectBounds(FrmGetActiveForm(), index, &button);
+        show(buttons[i], true);
+        CtlDrawControl(object(buttons[i]));
+        x += w + 1;
+    }
+}
+
+static void fullscreen_hint(const App *a)
+{
+    static const Char message[] = "Tap to exit fullscreen";
+    RGBColorType fg = {0, 255, 255, 255}, bg = {0, 35, 42, 50};
+    const uint8_t shade[] = {35, 42, 50};
+    Coord x = (a->view_width / 2 - 116) / 2, y = a->view_height / 2 - 21;
+    WinPushDrawState();
+    WinSetBackColorRGB(&bg, NULL);
+    WinSetTextColorRGB(&fg, NULL);
+    pt_paint_rgb(x, y, 116, 16, shade);
+    WinDrawChars(message, sizeof(message) - 1,
+                 x + (116 - FntCharsWidth(message, sizeof(message) - 1)) / 2, y + 2);
+    WinPopDrawState();
+}
+
 static void shell_draw(App *a, Boolean all)
 {
     if (!a->terminal.display) return;
+    if (a->hint_visible && (Int32)(TimGetTicks() - a->hint_deadline) >= 0) {
+        a->hint_visible = false;
+        all = true;
+    }
     PtFrame frame = {0};
-    if (pt_call(&a->arm, PT_DAMAGE, &frame, 0, 0) <= 0 && !all) return;
+    Int32 changed = pt_call(&a->arm, PT_DAMAGE, &frame, 0, 0);
     if (frame.bell) SndPlaySystemSound(sndInfo);
     if (form_id() != ShellForm) return;
+    Boolean browsing = frame.history_offset != 0;
+    if (browsing != a->browsing) {
+        a->browsing = browsing;
+        if (!a->fullscreen) shell_toolbar(a);
+    }
+    if (changed <= 0 && !all) return;
 
     UInt32 dirty[2] = {pt_le32(frame.rows), pt_le32(frame.rows + 4)};
     if (!(dirty[0] || dirty[1] || all)) return;
@@ -771,6 +887,7 @@ static void shell_draw(App *a, Boolean all)
             WinDrawBitmap((BitmapType *)a->terminal.display, 0, row * height);
     }
     WinSetCoordinateSystem(coords);
+    if (a->hint_visible) fullscreen_hint(a);
 }
 
 static Int32 shell_layout(App *a, FormType *form, const RectangleType *bounds)
@@ -789,21 +906,7 @@ static Int32 shell_layout(App *a, FormType *form, const RectangleType *bounds)
     const Boolean controls = !a->fullscreen;
     const Boolean typing = controls && a->typing;
     Coord toolbar = bounds->extent.y - SHELL_TOOLBAR + 1;
-    static const UInt16 buttons[] = {End, ShellFull, ShellSettings, Type,
-                                    Ctrl, Esc, Tab, ScrollUp, ScrollDown};
-    Coord right = bounds->extent.x - 1;
-    for (UInt16 i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
-        UInt16 index = object_index(buttons[i]);
-        RectangleType button;
-        FrmGetObjectBounds(form, index, &button);
-        Coord x = button.topLeft.x;
-        if (i < 4) {
-            x = right - button.extent.x;
-            right = x - 1;
-        }
-        FrmSetObjectPosition(form, index, x, toolbar);
-        show(buttons[i], controls);
-    }
+    shell_toolbar(a);
 
     UInt16 index = object_index(ShellText);
     RectangleType field;
@@ -865,8 +968,82 @@ static Boolean shell_key(App *a, const EventType *e)
     return true;
 }
 
+static void copy_screen(App *a)
+{
+    Char *copy = MemPtrNew(cbdMaxTextLength);
+    if (!copy) {
+        notice("Not enough memory to copy text.");
+        return;
+    }
+    UInt16 start = cbdMaxTextLength;
+    for (UInt16 row = a->grid.rows; row > 0; row--) {
+        uint8_t cells[PT_GRID_COLS * PT_CELL_BYTES];
+        Char line[PT_GRID_COLS];
+        if (pt_call(&a->arm, PT_ROW, cells, sizeof(cells), row - 1) != PT_OK) break;
+        UInt16 length = 0;
+        for (UInt16 col = 0; col < a->grid.cols; col++) {
+            UInt32 code = pt_le32(cells + col * PT_CELL_BYTES) & PT_CELL_CODE_MASK;
+            line[col] = !code ? ' ' : code >= 32 && code < 127 ? (Char)code : '?';
+            if (line[col] != ' ') length = col + 1;
+        }
+        if (start == cbdMaxTextLength && !length) continue;
+        if (length + (start < cbdMaxTextLength) > start) break;
+        if (start < cbdMaxTextLength) copy[--start] = '\n';
+        start -= length;
+        MemMove(copy + start, line, length);
+    }
+    if (start < cbdMaxTextLength)
+        ClipboardAddItem(clipboardText, copy + start, cbdMaxTextLength - start);
+    pt_wipe(copy, cbdMaxTextLength);
+    MemPtrFree(copy);
+    notice(start < cbdMaxTextLength ? "Visible terminal text copied." : "No terminal text to copy.");
+}
+
+static void paste_into_line(App *a)
+{
+    UInt16 length = 0;
+    MemHandle handle = ClipboardGetItem(clipboardText, &length);
+    const Char *copy = handle ? MemHandleLock(handle) : NULL;
+    if (!copy || !length) {
+        if (copy) MemHandleUnlock(handle);
+        notice("The clipboard has no text.");
+        return;
+    }
+    Char line[256];
+    UInt16 count = 0;
+    for (UInt16 i = 0; i < length && count < sizeof(line) - 1; i++) {
+        UInt8 c = (UInt8)copy[i];
+        if (c == '\r' || c == '\n' || c == '\t') {
+            if (count && line[count - 1] != ' ') line[count++] = ' ';
+        } else if (c >= 32 && c < 127) line[count++] = (Char)c;
+    }
+    MemHandleUnlock(handle);
+    if (!count) {
+        notice("The clipboard has no printable ASCII text.");
+        return;
+    }
+    if (!a->typing) {
+        a->typing = true;
+        set_field(ShellText, "");
+        draw_form(a, ShellForm, false);
+    }
+    if (a->shell && !FldInsert(object(ShellText), line, count))
+        notice("The input line is full.");
+    pt_wipe(line, sizeof(line));
+}
+
 static void shell_controls(App *a, UInt16 action)
 {
+    if (action == ShellMenu) {
+        static const UInt16 actions[] = {ShellFull, ShellSettings, CopyScreen, PasteLine, Disconnect};
+        ListType *menu = object(SessionActions);
+        LstSetPosition(menu, a->view_width / 2 - 108,
+                       a->view_height / 2 + (a->typing ? SHELL_LINE : 0) - 64);
+        LstSetSelection(menu, noListSelection);
+        Int16 choice = LstPopupList(menu);
+        if (choice < 0 || choice >= (Int16)(sizeof(actions) / sizeof(actions[0]))) return;
+        action = actions[choice];
+    }
     switch (action) {
     case Ctrl:
         a->ctrl = !a->ctrl;
@@ -874,12 +1051,25 @@ static void shell_controls(App *a, UInt16 action)
         break;
     case Esc: term_send(a, PT_ESC); break;
     case Tab: term_send(a, PT_TAB); break;
-    case ScrollUp: case ScrollDown:
-        pt_call(&a->arm, PT_SCROLL, NULL, 0, action == ScrollUp ? 8UL : (UInt32)-8);
+    case History: case ScrollUp: case ScrollDown:
+        if (pt_call(&a->arm, PT_SCROLL, NULL, 0, action == ScrollDown ? (UInt32)-8 : 8UL) == 0 &&
+            action == History) {
+            notice(a->appearance.history == PT_HISTORY_OFF ? "Scrollback is off." : "No earlier output.");
+        }
+        shell_draw(a, false);
+        break;
+    case BackToLive:
+        pt_call(&a->arm, PT_LIVE, NULL, 0, 0);
         shell_draw(a, false);
         break;
     case ShellSettings:
         open_settings(a);
+        break;
+    case CopyScreen:
+        copy_screen(a);
+        break;
+    case PasteLine:
+        paste_into_line(a);
         break;
     case ShellFull:
         enter_fullscreen(a);
@@ -904,9 +1094,11 @@ static void shell_controls(App *a, UInt16 action)
         FldDrawField(object(ShellText));
         break;
     }
-    case End:
-        stop(a);
-        FrmGotoForm(HomeForm);
+    case Disconnect:
+        if (confirm("Disconnect this SSH session?")) {
+            stop(a);
+            FrmGotoForm(HomeForm);
+        }
         break;
     }
 }
@@ -919,7 +1111,8 @@ static void pump(App *a)
         return;
     }
     UInt16 active = form_id();
-    if (!a->pumping || (active != BusyForm && active != ShellForm && active != SettingsForm))
+    if (!a->pumping || (active != BusyForm && active != ShellForm &&
+                        active != SettingsForm && active != BehaviorForm))
         return;
     if (!a->shell && TimGetTicks() - a->timestamp > SysTicksPerSecond() * CONNECT_TIMEOUT) {
         stop(a);
@@ -958,6 +1151,8 @@ static void pump(App *a)
 #ifdef PT_PROFILE
         a->handshake_ticks = TimGetTicks() - a->timestamp;
 #endif
+        UInt32 profile_id = pt_profile_save(a->db, &a->profile);
+        if (profile_id) remember_profile(a, profile_id);
         a->shell = true;
         a->cursor_on = true;
         cursor_reset(a);
@@ -967,8 +1162,11 @@ static void pump(App *a)
         FrmGotoForm(TrustForm);
     } else if (result == PT_CHANGED_HOST) {
         stop(a);
-        notice("Host key changed. Verify the new fingerprint before using Forget host.");
-        FrmGotoForm(HomeForm);
+        if (FrmAlert(HostChangedAlert) == 0) {
+            a->host_profile = a->profile;
+            a->host_key_from_home = true;
+            FrmGotoForm(ProfileHostForm);
+        } else FrmGotoForm(HomeForm);
     } else if (result < 0 || result == PT_CLOSED || (result == PT_IDLE && network == PT_NET_END)) {
         Int32 reason = network == PT_NET_FAIL ? a->net.error : (Int32)pt_le32(a->detail);
         stop(a);
@@ -987,6 +1185,10 @@ static void pump(App *a)
 static void draw_form(App *a, UInt16 id, Boolean opening)
 {
     FormType *form = FrmGetActiveForm();
+    if (opening && a->restore_settings_area) {
+        a->restore_settings_area = false;
+        PINSetInputAreaState(a->settings_input_area);
+    }
     RectangleType bounds = display_bounds();
     if (a->dia || a->can_rotate) {
         WinHandle window = FrmGetWindowHandle(form);
@@ -1014,8 +1216,8 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
         shell_draw(a, true);
         return;
     }
-    if (id == SettingsForm) {
-        if (opening)
+    if (id == SettingsForm || id == BehaviorForm) {
+        if (id == SettingsForm && opening && !a->preview.display)
             pt_bitmap_open(&a->preview, PT_PREVIEW_WIDTH, PT_PREVIEW_HEIGHT);
         pt_settings_draw(&a->arm, &a->draft, &a->preview);
         return;
@@ -1033,6 +1235,7 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
             show(Generate, false);
             show(Public, false);
             show(UsePassword, false);
+            show(HostKeyDetails, true);
         }
     }
     if (opening && id == TextForm) {
@@ -1056,6 +1259,10 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
             "Seed file on SD", "OpenSSH key file on SD", "Name for this key", "Public key destination on SD"
         };
         text(8, 40, prompt[a->text_action]);
+        if (a->text_action == InputSeed) {
+            text(8, 87, "Create with tools/make_seed.py");
+            text(8, 100, "on your desktop and copy to SD.");
+        }
     } else if (id == SecretForm) {
         static const Char *const prompt[] = {
             "SSH password", "Saved key passphrase", "OpenSSH key passphrase",
@@ -1066,15 +1273,22 @@ static void draw_form(App *a, UInt16 id, Boolean opening)
         else text(8, 52, "Enter with Graffiti or a keyboard.");
         draw_mask(a);
     } else if (id == TrustForm) {
-        Char digest[44], first[25];
-        fingerprint_text(a->detail + 4, digest);
-        MemMove(first, digest, 24);
-        first[24] = 0;
+        Char port_label[14] = "Port ";
+        StrCat(port_label, a->profile.port);
         text(8, 26, a->profile.host);
-        text(8, 43, "Compare this SHA-256 fingerprint");
-        text(8, 55, "with the server's trusted value.");
-        text(8, 75, first);
-        text(8, 88, digest + 24);
+        text(8, 39, port_label);
+        if (a->detail[0] == PT_HOST_KEY_ED25519) text(78, 39, "Ed25519");
+        else if (a->detail[0] == PT_HOST_KEY_P256) text(78, 39, "ECDSA P-256");
+        text(8, 57, "Compare with a trusted fingerprint.");
+        draw_fingerprint(a->detail + 4, 78);
+    } else if (id == ProfileHostForm) {
+        Char port_label[14] = "Port ";
+        StrCat(port_label, a->host_profile.port);
+        uint8_t fingerprint[32];
+        text(8, 26, a->host_profile.host);
+        text(8, 39, port_label);
+        if (pt_pin_find(a->db, &a->host_profile, fingerprint)) draw_fingerprint(fingerprint, 63);
+        else text(8, 63, "No saved host key.");
     } else if (id == BusyForm) {
         if (a->key_job) {
             text(8, 41, a->key_job == PT_KEY_SAVE ? "Protecting private key..." : "Unlocking private key...");
@@ -1116,7 +1330,7 @@ static Boolean on_form(EventType *event)
         draw_form(a, ShellForm, false);
         return true;
     }
-    if (id == SettingsForm) return settings_event(a, event);
+    if (id == SettingsForm || id == BehaviorForm) return settings_event(a, event);
     if (event->eType == keyDownEvent) {
         if (id == SecretForm) return secret_key(a, event);
         if (id == ShellForm) return shell_key(a, event);
@@ -1136,18 +1350,24 @@ static Boolean on_form(EventType *event)
             if (action == Profiles || action == Keys) go_list(a, action == Keys);
             else if (action == Seed) ask_text(a, InputSeed, "/PALMTERM.SEED");
             else if (action == HomeSettings) open_settings(a);
-            else if (action == ForgetHost) {
-                UInt32 pin = port(a) ? pt_pin_find(a->db, &a->profile, NULL) : 0;
-                if (!pin) notice("No saved host key for this host and port.");
-                else if (confirm("Forget this host key? Verify its replacement before connecting.") &&
-                         !pt_record_remove(a->db, pin, PT_RECORD_PIN))
-                    notice("Could not remove the host key.");
-            }
         }
     } else if (id == ListForm) {
         list_controls(a, action);
     } else if (id == ShellForm) {
         shell_controls(a, action);
+    } else if (id == ProfileHostForm) {
+        UInt16 destination = a->host_key_from_home ? HomeForm : ListForm;
+        if (action == Back) FrmGotoForm(destination);
+        else if (action == ForgetHost) {
+            UInt32 pin = pt_pin_find(a->db, &a->host_profile, NULL);
+            if (!pin) notice("No saved host key for this host and port.");
+            else if (confirm("Forget this host key? Verify its replacement before connecting.")) {
+                if (pt_record_remove(a->db, pin, PT_RECORD_PIN)) FrmGotoForm(destination);
+                else notice("Could not remove the host key.");
+            }
+        }
+    } else if (id == TrustForm && action == CopyFingerprint) {
+        copy_fingerprint(a);
     } else if (action == Accept) {
         if (id == TextForm) text_done(a);
         else if (id == SecretForm) secret_done(a);
@@ -1206,6 +1426,9 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
 #endif
     a->net.socket = -1;
     pt_settings_load(&a->appearance);
+    UInt16 hint_length = sizeof(a->hint_seen);
+    if (PrefGetAppPreferences(PT_CREATOR, HINT_PREF, &a->hint_seen, &hint_length, true) != 1 ||
+        hint_length != sizeof(a->hint_seen)) a->hint_seen = false;
     display_features(a);
     Boolean large_display = a->dia || a->can_rotate;
     a->bitmap_width = large_display ? PT_DISPLAY_LONG : PT_DISPLAY_SHORT;
@@ -1215,6 +1438,17 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
     Err result = errNone;
     pt_bitmap_open(&a->terminal, a->bitmap_width, pt_font_height(a->appearance.font));
     a->db = pt_store_open();
+    if (a->db) {
+        PtProfile last;
+        uint8_t saved[4];
+        UInt16 length = sizeof(saved);
+        if (PrefGetAppPreferences(PT_CREATOR, LAST_PROFILE_PREF, saved, &length, true) == 1 &&
+            length == sizeof(saved) && pt_profile_read(a->db, pt_le32(saved), &last)) {
+            a->last_profile_id = pt_le32(saved);
+            a->profile = last;
+            if (a->profile.key && !pt_key_stored(a->db, a->profile.key, NULL, NULL)) a->profile.key = 0;
+        }
+    }
     Boolean sleep_registered = false, display_registered = false, feature = false;
     UInt16 card = 0;
     LocalID db = 0;

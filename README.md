@@ -17,9 +17,18 @@ Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH t
 ## Install and connect
 
 1. [Build the PRC](#build-and-test), then install `build/PalmTerminal.prc` with HotSync or from an SD card. Set up the Palm's network connection in Preferences.
-2. On a trusted desktop, create a seed with `python3 tools/make_seed.py /path/to/SD/PALMTERM.SEED`. On the Palm, choose **Seed setup**, enter the SD path, and import the file. Remove the transferred file from the SD card and desktop after import. Provision each installation separately and import a fresh seed after restoring or cloning Palm state.
-3. Enter the host, port, and username. Choose **Connect**. On first contact, compare the SHA-256 fingerprint shown on the Palm with the value obtained through a trusted route, such as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` at the server console. Choose **Trust** if they match. The app reconnects with the saved host key and asks for the password or private-key passphrase. Use **Forget host** when you have independently established that a server's key has changed.
-4. Use Graffiti or a keyboard to type in the shell. The five-way navigator sends arrows and Enter. **Ctrl** applies to the next key. **^** and **v** browse local scrollback. **Type** opens the Palm keyboard and a line entry field. **Send** submits the line and Enter. **End** closes the shell.
+2. On a trusted desktop, create a seed with `python3 tools/make_seed.py /path/to/SD/PALMTERM.SEED`. Choose **Seed setup** or **Set up now**, enter the SD path, and import the file. Remove the transferred file from the SD card and desktop after import. Provision each installation separately and import a fresh seed after restoring or cloning Palm state.
+3. Enter the host, port, and username, then choose **Connect**. On first contact, compare the `SHA256:` fingerprint with the value obtained through a trusted route, such as `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` at the server console. **Copy** puts the full fingerprint on the Palm clipboard. Choose **Trust** if the fingerprints match, then enter your password or private-key passphrase. On relaunch, the last successful profile is ready to connect again.
+4. If the server key has changed, verify the replacement through a trusted source. Use **Saved key** in the warning, or select the connection in **Profiles** and open **Host key…**. Use **Forget key** there to clear the old pin, then reconnect and verify the replacement.
+
+## Using the shell
+
+- Use Graffiti or a keyboard to type in the shell. The five-way navigator sends arrows and Enter. **Ctrl** applies to the next key. **Type** opens the Palm keyboard and a line entry field. **Send** submits the line and Enter.
+- Tap **History** to browse scrollback with **Older** and **Newer**. **Back to live** returns to the prompt.
+- In **Menu**, use **Copy visible text** to copy the most recent visible lines within the Palm clipboard limit. Copy substitutes `?` for non-ASCII characters. **Paste into line** puts printable ASCII in the editable line and converts line breaks to spaces. Review the line before tapping **Send**.
+- Use **Menu → Disconnect** to end the SSH session.
+
+![Shell history with Older, Newer, and Back to live controls](docs/screenshots/scrollback.png)
 
 ## SSH keys
 
@@ -30,23 +39,23 @@ Captured on the Tungsten E2 and Palm TX in CloudpilotEmu using a local OpenSSH t
 
 ## Terminal settings
 
-Open **Settings** on the home screen or **Prefs** in an open shell. The preview shows the selected font, colors, and cursor. Settings apply to all connections. **Save** applies the changes to the current shell and saves them for later. **Defaults** restores the original choices in the preview.
+Open **Settings** on the home screen or **Menu → Appearance** in a shell. The three-line preview shows the font, colors, and cursor. Settings apply across connections. **Save** applies them to the current shell and remembers them for later. **Defaults** restores the original choices in the preview.
 
 - Choose a 5×8, 6×10, or 8×13 font. Changing the font updates the number of rows and columns sent to the server.
-- Set default text and background colors. Applications can continue to show their own ANSI colors. Choose a block, underline, bar, or hidden cursor, with optional blinking and a custom cursor color.
-- Choose up to 192 lines of scrollback or turn history off. **Follow output** returns to the live view when new text arrives while you're reading history. **Bell** enables the terminal beep, and **Bright ANSI bold** uses the bright palette for bold ANSI colors.
+- Choose a high-contrast preset or set text and background colors individually. Applications can continue to show their own ANSI colors. Choose a block, underline, bar, or hidden cursor, with optional blinking and a custom cursor color.
+- Under **Behavior**, choose up to 192 lines of scrollback or turn history off. **Follow output** returns to the live view when new text arrives while you're reading history. **Audible bell** enables the terminal beep, and **Bright ANSI bold** uses the bright palette for bold ANSI colors.
 
-![Terminal settings with a dark blue preview and custom scrollback](docs/screenshots/settings.png)
+![Terminal settings with a three-line preview and colors](docs/screenshots/settings.png)
 
 ## Fullscreen and Palm TX
 
-- Tap **Full** in a shell to hide the terminal controls and use the whole display. Tap the terminal to restore the controls. A line you were editing with **Type** returns with them.
+- Choose **Menu → Fullscreen** to hide the terminal controls and use the whole display. Tap the terminal to restore the controls. The first visit shows a brief exit hint. A line you were editing with **Type** returns with the controls.
 - On the TX, use the status bar to open or close the Dynamic Input Area (DIA) or switch between portrait and landscape. Palm Terminal resizes the live SSH session as the available space changes.
 - Fullscreen also hides the TX input area and status bar. Tap the terminal to restore the previous input-area state and use the system rotation control again.
 
 | Palm TX with the input area open | Palm TX in landscape fullscreen |
 | --- | --- |
-| ![Portrait shell above the Palm TX input area](docs/screenshots/tx-input-area.png) | ![Landscape fullscreen shell reporting 40 rows and 96 columns](docs/screenshots/tx-landscape-full.png) |
+| ![Portrait shell above the Palm TX input area](docs/screenshots/tx-input-area.png) | ![Landscape fullscreen shell reporting 32 rows and 80 columns](docs/screenshots/tx-landscape-full.png) |
 
 ## Build and test
 
@@ -64,7 +73,7 @@ build/host-test shell 14229 palmtest - terminal-test
 build/host-test shell 14229 palmtest /path/to/test_id_ed25519 import-pass
 ```
 
-See [Tungsten E2 verification](tests/E2.md) for the emulator setup and performance measurements and [Palm TX verification](tests/TX.md) for display and rotation results.
+See [Tungsten E2 verification](tests/E2.md) for the emulator setup and performance measurements, [Palm TX verification](tests/TX.md) for display and rotation, and [workflow verification](tests/UX.md) for the toolbar, reconnect, and settings.
 
 ## Compatibility
 
