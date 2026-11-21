@@ -314,7 +314,7 @@ static int finish_save(const PtIdentity *key, PtKeyIO *io)
     memcpy(pair, key->seed, 32);
     memcpy(pair + 32, key->public, 32);
     put_string(&p, pair, sizeof(pair));
-    put_text(&p, "Palm Terminal");
+    put_text(&p, "Terminal");
     for (uint8_t i = 1; (p - private) % 16; i++) *p++ = i;
     uint32_t private_size = (uint32_t)(p - private);
     p = options;

@@ -5,7 +5,7 @@ DATA "code" ID 1 "code0001.bin"
 
 FORM ID HomeForm AT (0 0 160 160)
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     LABEL "Host" AUTOID AT (8 22) FONT 0
     FIELD ID Host AT (8 34 108 13) EDITABLE SINGLELINE UNDERLINED MAXCHARS 95
     LABEL "Port" AUTOID AT (124 22) FONT 0
@@ -21,7 +21,7 @@ END
 
 FORM ID ListForm AT (0 0 160 160)
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     LIST "" ID Items AT (7 21 146 54) VISIBLEITEMS 5 FONT 0
     BUTTON "<" ID Prev AT (7 77 22 14)
     BUTTON ">" ID Next AT (33 77 22 14)
@@ -37,7 +37,7 @@ END
 
 FORM ID TextForm AT (0 0 160 160)
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     FIELD ID Value AT (7 65 146 14) EDITABLE SINGLELINE UNDERLINED MAXCHARS 127
     BUTTON "OK" ID Accept AT (8 118 65 15)
     BUTTON "Cancel" ID Cancel AT (85 118 65 15)
@@ -45,7 +45,7 @@ END
 
 FORM ID SecretForm AT (0 0 160 160)
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     BUTTON "OK" ID Accept AT (8 118 65 15)
     BUTTON "Cancel" ID Cancel AT (85 118 65 15)
 END
@@ -67,7 +67,7 @@ END
 
 FORM ID BusyForm AT (0 0 160 160)
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     BUTTON "Cancel" ID Cancel AT (48 123 63 15)
 END
 
@@ -133,7 +133,7 @@ END
 ALERT ID InfoAlert
 INFORMATION
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     MESSAGE "^1"
     BUTTONS "OK"
 END
@@ -141,7 +141,7 @@ END
 ALERT ID ConfirmAlert
 CONFIRMATION
 BEGIN
-    TITLE "Palm Terminal"
+    TITLE "Terminal"
     MESSAGE "^1"
     BUTTONS "Continue" "Cancel"
 END
@@ -162,6 +162,22 @@ BEGIN
     BUTTONS "Saved key" "Cancel"
 END
 
-APPLICATIONICONNAME ID AppName "Palm Terminal"
+ICONFAMILYEX
+BEGIN
+    BITMAP "icons/launcher-mono-1x.bmp" BPP 1 DENSITY 72
+    BITMAP "icons/launcher-color-1x.bmp" BPP 8 DENSITY 72 TRANSPARENT 255 0 255
+    BITMAP "icons/launcher-mono-2x.bmp" BPP 1 DENSITY 144
+    BITMAP "icons/launcher-color-2x.bmp" BPP 8 DENSITY 144 TRANSPARENT 255 0 255
+END
+
+SMALLICONFAMILYEX
+BEGIN
+    BITMAP "icons/list-mono-1x.bmp" BPP 1 DENSITY 72
+    BITMAP "icons/list-color-1x.bmp" BPP 8 DENSITY 72 TRANSPARENT 255 0 255
+    BITMAP "icons/list-mono-2x.bmp" BPP 1 DENSITY 144
+    BITMAP "icons/list-color-2x.bmp" BPP 8 DENSITY 144 TRANSPARENT 255 0 255
+END
+
+APPLICATIONICONNAME ID AppName "Terminal"
 VERSION ID AppVersion "0.1.0"
 STRING ID AppVersion "0.1.0"

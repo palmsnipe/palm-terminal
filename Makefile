@@ -11,8 +11,9 @@ SIZE := $(PREFIX)/bin/m68k-none-elf-size
 PILRC := $(PREFIX)/bin/pilrc
 BUILD_PRC := $(PREFIX)/bin/build-prc
 
-APP_NAME := Palm Terminal
-APP_ID := PalmTerminal
+# Preserve the database name so the PRC replaces earlier versions in place.
+APP_DB_NAME := Palm Terminal
+APP_ID := Terminal
 APP_CREATOR := PlTm
 APP_TYPE := appl
 BUILD_DIR := $(ROOT)/build
@@ -57,20 +58,21 @@ $(ELF): $(OBJECTS) linker.lkr
 $(CODE): $(ELF)
 	$(OBJCOPY) -O binary $< $@ -j .vec -j .text
 
-$(RESOURCES): $(CODE) resources/app.rcp resources/resource.h $(BUILD_DIR)/arm-resources.rcp
+$(RESOURCES): $(CODE) resources/app.rcp resources/resource.h $(BUILD_DIR)/arm-resources.rcp tools/icon.py
+	python3 tools/icon.py $(BUILD_DIR)/icons
 	cd $(BUILD_DIR) && $(PILRC) -ro -o $@ -creator $(APP_CREATOR) \
-		-type $(APP_TYPE) -name '$(APP_NAME)' -I $(ROOT)/resources -I $(BUILD_DIR) \
+		-type $(APP_TYPE) -name '$(APP_DB_NAME)' -I $(ROOT)/resources -I $(BUILD_DIR) \
 		$(ROOT)/resources/app.rcp
 
 $(PRC): $(RESOURCES)
-	$(BUILD_PRC) --no-check -o $@ -n '$(APP_NAME)' -c $(APP_CREATOR) \
+	$(BUILD_PRC) --no-check -o $@ -n '$(APP_DB_NAME)' -c $(APP_CREATOR) \
 		-t $(APP_TYPE) $(RESOURCES)
 	$(SIZE) $(ELF)
 	@echo "Built $@"
 
 test: $(PRC) host-test
 	node $(TOOLCHAIN_ROOT)/tools/validate-prc.mjs \
-		$(PRC) '$(APP_NAME)' $(APP_TYPE) $(APP_CREATOR)
+		$(PRC) '$(APP_DB_NAME)' $(APP_TYPE) $(APP_CREATOR)
 	python3 tools/arm_image.py verify $(PRC) $(BUILD_DIR)/arm.bin
 
 clean:

@@ -1454,7 +1454,7 @@ UInt32 PilotMain(UInt16 command, MemPtr parameters, UInt16 launch_flags)
     LocalID db = 0;
     if (!a->db || !a->terminal.display || !pt_arm_open(&a->arm, large_display) ||
         FtrSet(PT_CREATOR, APP_FEATURE, (UInt32)a)) {
-        notice("Palm Terminal could not initialize its native engine or database.");
+        notice("Terminal could not initialize its native engine or database.");
         result = memErrNotEnoughSpace;
     } else {
         feature = true;
